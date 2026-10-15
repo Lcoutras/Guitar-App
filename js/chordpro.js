@@ -35,8 +35,20 @@
     return CHORD_RE.test(t);
   }
 
+  // Notes written in brackets on a chord line, like "(let ring)" or "(x2)", are
+  // blanked out (keeping column positions) so the line still counts as chords.
+  function splitNotes(line) {
+    const notes = [];
+    const rest = line.replace(/\([^()]*\)/g, (m) => {
+      if (isChord(m)) return m;
+      notes.push(m);
+      return ' '.repeat(m.length);
+    });
+    return { rest, notes };
+  }
+
   function isChordLine(line) {
-    const tokens = line.trim().split(/\s+/).filter(Boolean);
+    const tokens = splitNotes(line).rest.trim().split(/\s+/).filter(Boolean);
     if (!tokens.length) return false;
     let chords = 0;
     for (const tok of tokens) {
@@ -267,12 +279,14 @@
   }
 
   function mergeChordsIntoLyric(chordLine, lyric) {
+    const { rest, notes } = splitNotes(chordLine);
     const chords = [];
     const re = /\S+/g;
     let m;
-    while ((m = re.exec(chordLine))) {
+    while ((m = re.exec(rest))) {
       const tok = m[0];
       if (isChord(tok) || NC_RE.test(tok)) chords.push({ pos: m.index, chord: normalizeAccidentals(tok) });
+      else if (/^(x\d+|\d+x)$/i.test(tok)) notes.push('(' + tok + ')');
     }
     if (!chords.length) return lyric;
     let out = lyric;
@@ -282,7 +296,29 @@
       const { pos, chord } = chords[i];
       out = out.slice(0, pos) + '[' + chord + ']' + out.slice(pos);
     }
-    return out.replace(/\s+$/, '');
+    out = out.replace(/\s+$/, '');
+    // Keep repeat counts and playing notes, at the end of the line.
+    return notes.length ? out + '  ' + notes.join(' ') : out;
+  }
+
+  // Some sites copy with an empty line after every line, which separates
+  // chords from their lyrics. Undo that when nearly every line is isolated.
+  function undoDoubleSpacing(lines) {
+    const filled = lines.map((l) => !!l.trim());
+    const n = filled.filter(Boolean).length;
+    if (n < 6) return lines;
+    let isolated = 0;
+    filled.forEach((f, i) => { if (f && !filled[i - 1] && !filled[i + 1]) isolated++; });
+    if (isolated / n < 0.7) return lines;
+    const out = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (filled[i]) { out.push(lines[i]); continue; }
+      let j = i;
+      while (j < lines.length && !filled[j]) j++;
+      if (j - i >= 2) out.push(''); // a real gap between sections
+      i = j - 1;
+    }
+    return out;
   }
 
   function cleanPasted(text) {
@@ -297,7 +333,7 @@
 
   // Converts chords-above-lyrics text to ChordPro. Returns { body, meta, stats }.
   function convert(text) {
-    const lines = cleanPasted(text).split('\n');
+    const lines = undoDoubleSpacing(cleanPasted(text).split('\n'));
     const meta = { title: '', artist: '', key: '', capo: '' };
     const out = [];
     let merged = 0;

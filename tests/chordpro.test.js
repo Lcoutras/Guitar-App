@@ -97,3 +97,37 @@ test('capo helper finds easy shapes', () => {
   assert.equal(best.capo, 3);
   assert.equal(best.shapesKey, 'G');
 });
+
+test('copies with an empty line after every line still line up', () => {
+  const text = [
+    '[Verse 1]', '',
+    'G'.padEnd(15) + 'C', '',
+    'Amazing grace, how sweet the sound', '',
+    'G'.padEnd(20) + 'D', '',
+    'That saved a wretch like me', '', '', '',
+    '[Chorus]', '',
+    'C'.padEnd(5) + 'G', '',
+    'Sing it out loud', '',
+  ].join('\n');
+  const r = CP.convert(text);
+  assert.equal(r.body, [
+    '{c: Verse 1}',
+    '[G]Amazing grace, [C]how sweet the sound',
+    '[G]That saved a wretch [D]like me',
+    '',
+    '{c: Chorus}',
+    '[C]Sing [G]it out loud',
+  ].join('\n'));
+});
+
+test('notes and repeat counts on chord lines are kept', () => {
+  assert.ok(CP.isChordLine('Am   G   (let ring)'));
+  assert.equal(CP.convert('G   C   D   x2').body, '[G]    [C]    [D]  (x2)');
+  assert.equal(CP.convert('Am      G (let ring)\nHello there friend').body, '[Am]Hello th[G]ere friend  (let ring)');
+  assert.ok(!CP.isChordLine('(Repeat chorus)'));
+});
+
+test('Windows line endings, tabs and non-breaking spaces', () => {
+  const r = CP.convert('G\u00a0\u00a0\u00a0C\r\nHey there Joe\r\n');
+  assert.equal(r.body, '[G]Hey [C]there Joe');
+});

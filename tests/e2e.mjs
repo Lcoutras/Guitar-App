@@ -162,6 +162,13 @@ for (const size of sizes) {
   await page.$eval('#sheet-scroll', (e) => { e.scrollTop = e.scrollHeight; });
   await page.keyboard.press('ArrowRight');
   check((await page.$eval('.ptitle .t', (e) => e.textContent)) === 'Lantern on the Ridge', `${size.name}: pedal at end did not advance`);
+  const tabFit = await page.$eval('#sheet-scroll pre.tab', (p) => p.scrollWidth - p.clientWidth);
+  check(tabFit <= 1, `${size.name}: guitar tab is ${tabFit}px wider than the screen`);
+  await page.click('[data-act="font"][data-d="1"]');
+  await page.click('[data-act="font"][data-d="1"]');
+  const tabFitBig = await page.$eval('#sheet-scroll pre.tab', (p) => p.scrollWidth - p.clientWidth);
+  check(tabFitBig <= 1, `${size.name}: guitar tab overflows after enlarging text by ${tabFitBig}px`);
+  await page.$eval('#sheet-scroll', (e) => { e.scrollTop = 0; });
   await shot(page, `${size.name}-7-perform-setlist`);
 
   // Settings and daylight mode

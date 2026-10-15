@@ -209,6 +209,21 @@
     return '<article class="sheet"' + (fs ? ' style="--fs:' + fs + '"' : '') + '>' + (html || '<p class="ln"><span class="ly" style="color:var(--muted)">No chords or lyrics yet.</span></p>') + '</article>';
   }
 
+  // Shrinks guitar tab blocks that are wider than the screen so every line
+  // stays readable without sideways scrolling.
+  function fitTabs(rootEl) {
+    (rootEl || document).querySelectorAll('pre.tab').forEach((pre) => {
+      pre.style.fontSize = '';
+      const avail = pre.clientWidth;
+      if (!avail || pre.scrollWidth <= avail + 1) return;
+      const cs = getComputedStyle(pre);
+      const px = parseFloat(cs.fontSize);
+      const pad = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+      const ratio = (avail - pad) / (pre.scrollWidth - pad);
+      pre.style.fontSize = Math.max(8, Math.floor(px * ratio * 10) / 10) + 'px';
+    });
+  }
+
   function keyInfo(song) {
     const t = song.transpose || 0;
     const capo = Number(song.capo) || 0;
@@ -353,6 +368,7 @@
         '</div>' +
       '</div>' +
       '<div class="preview-scroll gutter">' + renderSheet(song) + '</div>';
+    fitTabs(el);
   }
 
   function setlistsBody() {
@@ -490,6 +506,7 @@
       if (wide) wide.innerHTML = '<span class="eyebrow">Preview</span>' + html;
       const mob = $('#ed-preview-mobile');
       if (mob && !mob.hidden) mob.innerHTML = html;
+      fitTabs(app);
       const q = [d.title, d.artist].filter(Boolean).join(' ');
       const fo = $('#find-online');
       if (fo) fo.innerHTML = '<p>Find the chords online. Copy them from the page, come back, and paste them below.</p>' + findOnlineLinks(q, true);
@@ -629,6 +646,7 @@
           '</div>' : '') +
         '</footer>' +
       '</div>';
+    fitTabs(app);
     requestWakeLock();
     bindSheetGestures();
   }
@@ -1079,7 +1097,7 @@
           song.fontScale = Math.round(clamp((song.fontScale || 1) + Number(el.dataset.d) * 0.1, FONT_MIN, FONT_MAX) * 10) / 10;
           saveSongPrefsSoon(song);
           const sheet = $('#sheet-scroll .sheet');
-          if (sheet) sheet.style.setProperty('--fs', song.fontScale);
+          if (sheet) { sheet.style.setProperty('--fs', song.fontScale); fitTabs(sheet); }
         }
         break;
       case 'transpose':
@@ -1155,6 +1173,7 @@
   window.addEventListener('resize', () => {
     const wide = window.matchMedia('(min-width: 900px)').matches;
     if (wide !== lastWide && state.view === 'library') { lastWide = wide; render(); }
+    else fitTabs(app);
     lastWide = wide;
   });
 
