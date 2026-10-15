@@ -1,0 +1,203 @@
+// Browser check at iPad and phone sizes. Usage: node tests/e2e.mjs [outDir]
+// Serves the app locally, walks through the main flows, saves screenshots and
+// fails on console errors or sideways page scrolling.
+import { createRequire } from 'node:module';
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const require = createRequire(import.meta.url);
+let playwright;
+try { playwright = require('playwright'); } catch { playwright = require('/opt/node22/lib/node_modules/playwright'); }
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const out = path.resolve(process.argv[2] || path.join(root, 'test-results'));
+fs.mkdirSync(out, { recursive: true });
+
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.json': 'application/json' };
+const server = http.createServer((req, res) => {
+  let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+  if (p.endsWith('/')) p += 'index.html';
+  const file = path.join(root, p);
+  if (!file.startsWith(root) || !fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
+  res.writeHead(200, { 'content-type': TYPES[path.extname(file)] || 'application/octet-stream' });
+  fs.createReadStream(file).pipe(res);
+});
+await new Promise((r) => server.listen(0, r));
+const base = `http://127.0.0.1:${server.address().port}/`;
+
+const browser = await playwright.chromium.launch();
+const failures = [];
+const check = (cond, msg) => { if (!cond) failures.push(msg); };
+
+async function newPage(name, viewport, opts = {}) {
+  const ctx = await browser.newContext({ viewport, deviceScaleFactor: 2, hasTouch: true, isMobile: !!opts.mobile, serviceWorkers: 'block' });
+  const page = await ctx.newPage();
+  page.on('console', (m) => { if (m.type() === 'error') failures.push(`${name}: console error: ${m.text()}`); });
+  page.on('pageerror', (e) => failures.push(`${name}: page error: ${e.message}`));
+  await page.goto(base);
+  await page.waitForSelector('.song-row');
+  return { ctx, page };
+}
+
+async function noSideScroll(page, label) {
+  const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  check(over <= 0, `${label}: page scrolls sideways by ${over}px`);
+}
+
+const shot = (page, name) => page.screenshot({ path: path.join(out, name + '.png') });
+
+const sizes = [
+  { name: 'ipad-landscape', viewport: { width: 1180, height: 820 } },
+  { name: 'ipad-portrait', viewport: { width: 820, height: 1180 } },
+  { name: 'phone', viewport: { width: 390, height: 844 }, mobile: true },
+];
+
+for (const size of sizes) {
+  const { ctx, page } = await newPage(size.name, size.viewport, size);
+  const wide = size.viewport.width >= 900;
+
+  // Library
+  const titles = await page.$$eval('.song-row .row-title', (els) => els.map((e) => e.textContent));
+  check(titles.length === 4, `${size.name}: expected 4 example songs, got ${titles.length}`);
+  check(titles[0] === 'Amazing Grace' && titles[1] === 'House of the Rising Sun', `${size.name}: A–Z order wrong: ${titles.join(', ')}`);
+  await noSideScroll(page, size.name + ' library');
+  await shot(page, `${size.name}-1-library`);
+
+  // Sort by artist and search
+  await page.click('[data-act="sort"][data-sort="artist"]');
+  const heads = await page.$$eval('.group-head', (els) => els.map((e) => e.textContent));
+  check(heads[0] === 'John Newton (trad.)', `${size.name}: artist sort first group is ${heads[0]}`);
+  await page.fill('#q', 'susan');
+  check((await page.$$('.song-row')).length === 1, `${size.name}: search should find 1 song`);
+  await page.fill('#q', 'wonderwall');
+  check(!!(await page.$('a[href*="ultimate-guitar.com/search.php"]')), `${size.name}: no-results should offer Find online`);
+  await page.fill('#q', '');
+  await page.click('[data-act="sort"][data-sort="title"]');
+
+  // Open a song in performance view
+  if (wide) {
+    await page.click('.song-row:has-text("Rising Sun")');
+    await page.click('#preview [data-act="perform"]');
+  } else {
+    await page.click('.song-row:has-text("Rising Sun")');
+  }
+  await page.waitForSelector('#sheet-scroll .sheet');
+  check((await page.$$eval('#sheet-scroll .ch.on', (els) => els.length)) > 20, `${size.name}: chords not rendered`);
+  await noSideScroll(page, size.name + ' perform');
+  await shot(page, `${size.name}-2-perform`);
+
+  // Chords sit above the right words
+  const pos = await page.evaluate(() => {
+    const cell = [...document.querySelectorAll('#sheet-scroll .c')].find((c) => c.querySelector('.ly').textContent.startsWith('house'));
+    const ch = cell.querySelector('.ch').getBoundingClientRect();
+    const ly = cell.querySelector('.ly').getBoundingClientRect();
+    return { chord: cell.querySelector('.ch').textContent, above: ch.bottom <= ly.top + 1, left: Math.abs(ch.left - ly.left) };
+  });
+  check(pos.chord === 'C' && pos.above && pos.left < 1, `${size.name}: chord C not above "house": ${JSON.stringify(pos)}`);
+
+  // Transpose up 2: Am -> Bm
+  await page.click('[data-act="transpose"][data-d="1"]');
+  await page.click('[data-act="transpose"][data-d="1"]');
+  const first = await page.$eval('#sheet-scroll .ch.on', (e) => e.textContent);
+  check(first === 'Bm', `${size.name}: transpose gave ${first}`);
+  await page.click('[data-act="transpose"][data-d="-1"]');
+  await page.click('[data-act="transpose"][data-d="-1"]');
+
+  // Autoscroll moves the sheet; pedal keys page down
+  await page.click('[data-act="speed"][data-d="1"]');
+  await page.click('#play-btn');
+  await page.waitForTimeout(1200);
+  const scrolled = await page.$eval('#sheet-scroll', (e) => e.scrollTop);
+  check(scrolled > 10, `${size.name}: autoscroll did not move (${scrolled})`);
+  await page.keyboard.press('Space');
+  const before = await page.$eval('#sheet-scroll', (e) => e.scrollTop);
+  await page.keyboard.press('PageDown');
+  await page.waitForTimeout(700);
+  const after = await page.$eval('#sheet-scroll', (e) => e.scrollTop);
+  check(after > before + 50, `${size.name}: PageDown did not scroll (${before} -> ${after})`);
+
+  // Capo helper
+  await page.click('[data-act="capo"]');
+  await page.waitForSelector('.capo-row');
+  await shot(page, `${size.name}-3-capo`);
+  await page.click('#m-cancel');
+  await page.click('[data-act="exit-perform"]');
+
+  // Add a song by pasting a chord sheet
+  await page.click('[data-act="new-song"]');
+  await page.waitForSelector('#ed-body');
+  const sheet = await page.evaluate(() => window.Seed.pasteExample);
+  await page.focus('#ed-body');
+  await page.evaluate((text) => {
+    const dt = new DataTransfer();
+    dt.setData('text/plain', text);
+    document.getElementById('ed-body').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  }, sheet);
+  await page.waitForTimeout(200);
+  const body = await page.$eval('#ed-body', (e) => e.value);
+  check(body.includes('[D]Oh Shenandoah, I [G]long to [D]see you'), `${size.name}: paste conversion wrong:\n${body.slice(0, 200)}`);
+  check((await page.$eval('#ed-title', (e) => e.value)) === 'Shenandoah', `${size.name}: title not filled from paste`);
+  if (!wide) { await page.click('[data-act="ed-pane"][data-pane="preview"]'); await page.waitForTimeout(150); }
+  await noSideScroll(page, size.name + ' editor');
+  await shot(page, `${size.name}-4-editor`);
+  await page.click('[data-act="save-edit"]');
+  await page.waitForTimeout(200);
+  check((await page.$$('.song-row')).length === 5, `${size.name}: new song not in library`);
+
+  // Setlist: open, play through, next song
+  await page.click('[data-act="tab"][data-tab="setlists"]');
+  await shot(page, `${size.name}-5-setlists`);
+  await page.click('.set-card');
+  await page.waitForSelector('.set-row');
+  await shot(page, `${size.name}-6-setlist`);
+  await page.click('[data-act="play-set"]');
+  await page.waitForSelector('.set-pos');
+  check((await page.$eval('.ptitle .t', (e) => e.textContent)) === 'Oh! Susanna', `${size.name}: setlist did not start at song 1`);
+  await page.click('.pfoot [data-act="next-song"]');
+  check((await page.$eval('.ptitle .t', (e) => e.textContent)) === 'House of the Rising Sun', `${size.name}: next song failed`);
+  check((await page.$eval('.set-pos', (e) => e.textContent)).startsWith('2 / 4'), `${size.name}: setlist position wrong`);
+  // Pedal at the end of a song moves to the next one
+  await page.$eval('#sheet-scroll', (e) => { e.scrollTop = e.scrollHeight; });
+  await page.keyboard.press('ArrowRight');
+  check((await page.$eval('.ptitle .t', (e) => e.textContent)) === 'Lantern on the Ridge', `${size.name}: pedal at end did not advance`);
+  await shot(page, `${size.name}-7-perform-setlist`);
+
+  // Settings and daylight mode
+  await page.click('[data-act="exit-perform"]');
+  await page.click('[data-act="home"]');
+  await page.click('[data-act="settings"]');
+  await noSideScroll(page, size.name + ' settings');
+  await shot(page, `${size.name}-8-settings`);
+  await page.click('[data-act="stage"][data-stage="light"]');
+  await page.click('[data-act="home"]');
+  await page.click('[data-act="tab"][data-tab="songs"]');
+  if (!wide) await page.click('.song-row:has-text("Lantern")');
+  await shot(page, `${size.name}-9-daylight`);
+
+  // Data survives a reload (IndexedDB)
+  await page.reload();
+  await page.waitForSelector('.song-row');
+  check((await page.$$('.song-row')).length === 5, `${size.name}: songs lost after reload`);
+  check((await page.getAttribute('html', 'data-stage')) === 'light', `${size.name}: setting lost after reload`);
+  await ctx.close();
+}
+
+// App icons
+{
+  const ctx = await browser.newContext({ viewport: { width: 512, height: 512 } });
+  const page = await ctx.newPage();
+  const svg = fs.readFileSync(path.join(root, 'icons/icon.svg'), 'utf8');
+  for (const [file, size, pad] of [['icon-512.png', 512, 0], ['icon-192.png', 192, 0], ['apple-touch-icon.png', 180, 0]]) {
+    await page.setViewportSize({ width: size, height: size });
+    await page.setContent(`<style>html,body{margin:0;background:#0d1016}svg{display:block;width:${size}px;height:${size}px}</style>${svg.replace('rx="112"', pad ? 'rx="0"' : 'rx="0"')}`);
+    await page.screenshot({ path: path.join(root, 'icons', file) });
+  }
+  await ctx.close();
+}
+
+await browser.close();
+server.close();
+if (failures.length) { console.error('FAILED:\n- ' + failures.join('\n- ')); process.exit(1); }
+console.log('All browser checks passed. Screenshots in ' + out);
