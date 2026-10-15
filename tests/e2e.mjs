@@ -33,6 +33,7 @@ const check = (cond, msg) => { if (!cond) failures.push(msg); };
 
 async function newPage(name, viewport, opts = {}) {
   const ctx = await browser.newContext({ viewport, deviceScaleFactor: 2, hasTouch: true, isMobile: !!opts.mobile, serviceWorkers: 'block' });
+  await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
   const page = await ctx.newPage();
   page.on('console', (m) => { if (m.type() === 'error') failures.push(`${name}: console error: ${m.text()}`); });
   page.on('pageerror', (e) => failures.push(`${name}: page error: ${e.message}`));
@@ -139,6 +140,17 @@ for (const size of sizes) {
   const body = await page.$eval('#ed-body', (e) => e.value);
   check(body.includes('[D]Oh Shenandoah, I [G]long to [D]see you'), `${size.name}: paste conversion wrong:\n${body.slice(0, 200)}`);
   check((await page.$eval('#ed-title', (e) => e.value)) === 'Shenandoah', `${size.name}: title not filled from paste`);
+  // Send a badly pasted song: message includes the song and the original paste
+  await page.click('[data-act="feedback-song"]');
+  await page.waitForSelector('#fb-msg');
+  check((await page.getAttribute('[data-kind="song"]', 'aria-pressed')) === 'true', `${size.name}: song feedback not preselected`);
+  await page.fill('#fb-msg', 'Chorus chords look shifted');
+  await shot(page, `${size.name}-4b-suggest-song`);
+  await page.click('#fb-copy');
+  const sent = await page.evaluate(() => navigator.clipboard.readText());
+  check(sent.includes('Song looks wrong') && sent.includes('Chorus chords look shifted'), `${size.name}: feedback text missing message`);
+  check(sent.includes('[D]Oh Shenandoah, I [G]long to') && sent.includes('As originally pasted') && sent.includes('Shenandoah Chords by Traditional'),
+    `${size.name}: feedback missing the song or original paste`);
   if (!wide) { await page.click('[data-act="ed-pane"][data-pane="preview"]'); await page.waitForTimeout(150); }
   await noSideScroll(page, size.name + ' editor');
   await shot(page, `${size.name}-4-editor`);
@@ -177,6 +189,24 @@ for (const size of sizes) {
   await page.click('[data-act="settings"]');
   await noSideScroll(page, size.name + ' settings');
   await shot(page, `${size.name}-8-settings`);
+  // General suggestion with a saved address
+  await page.fill('#feedback-to', 'friend@example.com');
+  await page.press('#feedback-to', 'Tab');
+  await page.click('[data-act="feedback"]');
+  await page.waitForSelector('#fb-msg');
+  check((await page.textContent('#fb-send')).includes('Email it'), `${size.name}: email button label wrong`);
+  check(!(await page.$('[data-kind="song"]')), `${size.name}: song option shown without a song`);
+  await page.click('[data-kind="problem"]');
+  await page.fill('#fb-msg', 'Add a metronome');
+  await page.click('#fb-copy');
+  const idea = await page.evaluate(() => navigator.clipboard.readText());
+  check(idea.startsWith('Stage Tabs: Something’s not working') && idea.includes('Add a metronome') && !idea.includes('=== Song'), `${size.name}: general feedback text wrong:\n${idea}`);
+  const links = await page.evaluate(() => [
+    window.StageTabs.feedbackLink('friend@example.com', 'Hi', 'Body'),
+    window.StageTabs.feedbackLink('+1 555 123 4567', 'Hi', 'Body'),
+  ]);
+  check(links[0] === 'mailto:friend@example.com?subject=Hi&body=Body', `${size.name}: mailto link wrong: ${links[0]}`);
+  check(links[1].startsWith('sms:+15551234567&body='), `${size.name}: sms link wrong: ${links[1]}`);
   await page.click('[data-act="stage"][data-stage="light"]');
   await page.click('[data-act="home"]');
   await page.click('[data-act="tab"][data-tab="songs"]');

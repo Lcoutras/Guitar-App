@@ -271,7 +271,8 @@ details.help code { font-family: var(--font-mono); color: var(--chord); }
 .settings-sec { padding: 18px 0; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; }
 .settings-sec h3 { margin: 0; font-family: var(--font-display); font-size: 1.1rem; }
 .settings-sec p { margin: 0; color: var(--muted); max-width: 62ch; }
-.settings-sec .row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.settings-sec .row-actions, .edit-form .row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+textarea.input { min-height: 120px; resize: vertical; line-height: 1.45; }
 .keys { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; color: var(--muted); }
 .keys kbd { font-family: var(--font-mono); font-size: 0.85rem; color: var(--fg); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; white-space: nowrap; }
 
