@@ -26,6 +26,7 @@
     settings: { stage: 'dark' },
   };
 
+  const APP_VERSION = '1.1';
   const SPEED_MIN = 1, SPEED_MAX = 20, SPEED_DEFAULT = 6;
   const FONT_MIN = 0.6, FONT_MAX = 2.4;
 
@@ -56,6 +57,7 @@
     file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
     wand: '<path d="m15 4 5 5L9 20H4v-5z"/><path d="M13 6l5 5"/>',
     download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5M12 15V3"/>',
+    send: '<path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/>',
     upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5M12 3v12"/>',
   };
   const icon = (name) => '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">' + ICONS[name] + '</svg>';
@@ -475,7 +477,10 @@
               '</details>' +
             '</div>' +
             '<div class="edit-pane-preview" id="ed-preview-mobile"' + (e.pane === 'preview' ? '' : ' hidden') + '></div>' +
-            (e.isNew ? '' : '<div><button class="btn danger" data-act="delete-song">Delete song</button></div>') +
+            '<div class="row-actions">' +
+              '<button class="btn" data-act="feedback-song">' + icon('send') + 'Song looks wrong? Send it</button>' +
+              (e.isNew ? '' : '<button class="btn danger" data-act="delete-song">Delete song</button>') +
+            '</div>' +
           '</section>' +
           '<section class="edit-preview gutter" id="ed-preview"></section>' +
         '</div>' +
@@ -513,9 +518,12 @@
     }, 60);
   }
 
-  function applyImported(result, replaceBody) {
+  // `original` is the text as pasted or loaded, kept with the song so a badly
+  // converted sheet can be sent back for fixing.
+  function applyImported(result, replaceBody, original) {
     const d = readEditForm();
     if (replaceBody) d.body = result.body;
+    if (replaceBody && original) d.source = original;
     if (!d.title && result.meta.title) d.title = result.meta.title;
     if (!d.artist && result.meta.artist) d.artist = result.meta.artist;
     if (!d.key && result.meta.key) d.key = result.meta.key;
@@ -551,6 +559,12 @@
           '<h2>Settings &amp; backup</h2>' +
         '</header>' +
         '<div class="scroll-body gutter"><div class="narrow">' +
+          '<section class="settings-sec"><h3>Suggestions and problems</h3>' +
+            '<p>Got an idea for the app, or a song that didn’t paste right? Send it from here. A song that looks wrong is sent along with what you originally pasted, so it can be fixed.</p>' +
+            '<div class="row-actions"><button class="btn primary" data-act="feedback">' + icon('send') + 'Send a suggestion</button></div>' +
+            '<div class="field"><label for="feedback-to">Send suggestions to (email or mobile number)</label>' +
+              '<input class="input" id="feedback-to" type="text" inputmode="email" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Optional. Fills in the To line for you" value="' + esc(state.settings.feedbackTo || '') + '"></div>' +
+          '</section>' +
           '<section class="settings-sec"><h3>Back up your songs</h3>' +
             '<p>Your ' + state.songs.length + ' songs and ' + state.setlists.length + ' setlists are saved on this device only. Save a backup file to Files or iCloud Drive now and then, and use it to move your library to a new iPad.</p>' +
             '<div class="row-actions"><button class="btn primary" data-act="export">' + icon('download') + 'Save backup file</button>' +
@@ -908,6 +922,83 @@
 
   const normSteps = (n) => ((((n + 6) % 12) + 12) % 12) - 6;
 
+  // ---------- Suggestions ----------
+
+  function deviceName() {
+    const ua = navigator.userAgent;
+    if (/iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'iPad';
+    if (/iPhone/.test(ua)) return 'iPhone';
+    if (/Android/.test(ua)) return 'Android';
+    if (/Macintosh/.test(ua)) return 'Mac';
+    if (/Windows/.test(ua)) return 'Windows';
+    return 'Other device';
+  }
+
+  const FEEDBACK_KINDS = { idea: 'Idea', problem: 'Something’s not working', song: 'Song looks wrong' };
+
+  function composeFeedback(kind, message, song) {
+    const lines = ['Stage Tabs: ' + FEEDBACK_KINDS[kind], '', message.trim() || '(no message)'];
+    if (song) {
+      lines.push('', '=== Song: ' + (song.title || 'Untitled') + (song.artist ? ' by ' + song.artist : '') + ' ===');
+      if (song.key || Number(song.capo)) lines.push([song.key && 'Key ' + song.key, Number(song.capo) && 'Capo ' + song.capo].filter(Boolean).join(', '));
+      lines.push('', '--- How it shows in the app ---', song.body || '(empty)');
+      if (song.source && song.source.trim() !== (song.body || '').trim()) lines.push('', '--- As originally pasted ---', song.source);
+    }
+    lines.push('', '---', 'Stage Tabs ' + APP_VERSION + ' on ' + deviceName());
+    return lines.join('\n');
+  }
+
+  function feedbackLink(to, subject, body) {
+    const dest = String(to || '').trim();
+    const phone = dest.replace(/[\s()-]/g, '');
+    if (/^\+?\d{6,}$/.test(phone)) return 'sms:' + phone + '&body=' + encodeURIComponent(subject + '\n\n' + body);
+    return 'mailto:' + dest.replace(/\s/g, '') + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+  }
+
+  function feedbackModal(song) {
+    let kind = song ? 'song' : 'idea';
+    const canShare = !!navigator.share;
+    const to = (state.settings.feedbackTo || '').trim();
+    openModal('<header><h3>Send a suggestion</h3></header><div class="modal-body">' +
+      '<div class="seg" style="margin-bottom:12px;flex-wrap:wrap">' +
+        Object.keys(FEEDBACK_KINDS).filter((k) => k !== 'song' || song).map((k) =>
+          '<button data-kind="' + k + '" aria-pressed="' + (k === kind) + '">' + FEEDBACK_KINDS[k] + '</button>').join('') +
+      '</div>' +
+      '<div class="field"><label for="fb-msg">Your message</label>' +
+        '<textarea class="input" id="fb-msg" rows="5" placeholder="' + (song ? 'What looks wrong? e.g. the chords in the chorus are shifted' : 'What would make the app better?') + '"></textarea></div>' +
+      (song ? '<p style="margin:10px 0 0">“' + esc(song.title || 'Untitled') + '” is attached' + (song.source ? ', with what you originally pasted' : '') + '.</p>' : '') +
+      '<p style="margin:10px 0 0">' + (to ? 'Goes to ' + esc(to) + '.' : 'You choose who to send it to. You can save an address in Settings.') + '</p>' +
+      '</div><footer>' +
+        '<button class="btn" id="fb-copy">Copy</button>' +
+        (canShare ? '<button class="btn" id="fb-share">Share…</button>' : '') +
+        '<button class="btn primary" id="fb-send">' + (/^\+?[\d\s()-]{6,}$/.test(to) ? 'Text it' : 'Email it') + '</button>' +
+      '</footer>', (m) => {
+      const msg = m.querySelector('#fb-msg');
+      const text = () => composeFeedback(kind, msg.value, song);
+      const subject = () => 'Stage Tabs: ' + FEEDBACK_KINDS[kind] + (song && kind === 'song' ? ' (' + (song.title || 'Untitled') + ')' : '');
+      m.querySelectorAll('[data-kind]').forEach((b) => {
+        b.onclick = () => {
+          kind = b.dataset.kind;
+          m.querySelectorAll('[data-kind]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+        };
+      });
+      m.querySelector('#fb-send').onclick = () => {
+        window.location.href = feedbackLink(to, subject(), text());
+        closeModal();
+      };
+      const share = m.querySelector('#fb-share');
+      if (share) share.onclick = async () => {
+        try { await navigator.share({ title: subject(), text: text() }); closeModal(); toast('Thanks for the suggestion'); }
+        catch (e) { if (!e || e.name !== 'AbortError') toast('Couldn’t open sharing. Try Copy instead.'); }
+      };
+      m.querySelector('#fb-copy').onclick = async () => {
+        try { await navigator.clipboard.writeText(text()); closeModal(); toast('Copied. Paste it into a message or email.'); }
+        catch (e) { msg.value = text(); msg.select(); toast('Select all and copy the text in the box'); }
+      };
+      msg.focus();
+    });
+  }
+
   // ---------- Backup ----------
 
   async function exportBackup() {
@@ -958,8 +1049,9 @@
     let n = 0;
     for (const f of files) {
       if (/\.json$/i.test(f.name)) { await restoreBackup(f); continue; }
-      const r = CP.importText(await f.text(), f.name);
-      await saveSong(newSong({ title: r.meta.title || 'Untitled', artist: r.meta.artist || '', key: r.meta.key || '', capo: Number(r.meta.capo) || 0, body: r.body }));
+      const raw = await f.text();
+      const r = CP.importText(raw, f.name);
+      await saveSong(newSong({ title: r.meta.title || 'Untitled', artist: r.meta.artist || '', key: r.meta.key || '', capo: Number(r.meta.capo) || 0, body: r.body, source: raw }));
       n++;
     }
     if (n) toast('Imported ' + n + ' song' + (n === 1 ? '' : 's'));
@@ -1050,10 +1142,10 @@
         const d = readEditForm();
         if (!d.body.trim()) { toast('Paste a chord sheet first'); break; }
         if (CP.looksLikeChordPro(d.body)) { toast('Chords are already lined up'); break; }
-        applyImported(CP.importText(d.body), true);
+        applyImported(CP.importText(d.body), true, d.body);
         break;
       }
-      case 'paste-example': applyImported(CP.importText(window.Seed.pasteExample), true); break;
+      case 'paste-example': applyImported(CP.importText(window.Seed.pasteExample), true, window.Seed.pasteExample); break;
       case 'delete-song': {
         const d = state.edit.draft;
         if (await confirmBox('Delete “' + (d.title || 'Untitled') + '”?', 'It will be removed from your library and from any setlists.', 'Delete song', true)) {
@@ -1066,6 +1158,8 @@
 
       // Settings
       case 'export': exportBackup(); break;
+      case 'feedback': feedbackModal(null); break;
+      case 'feedback-song': feedbackModal(Object.assign({}, readEditForm())); break;
       case 'stage':
         state.settings.stage = el.dataset.stage; applyStage(); Store.setMeta('settings', state.settings); render(); break;
       case 'remove-examples':
@@ -1122,12 +1216,17 @@
 
   app.addEventListener('change', async (e) => {
     const t = e.target;
-    if (t.id === 'set-name') {
+    if (t.id === 'feedback-to') {
+      state.settings.feedbackTo = t.value.trim();
+      Store.setMeta('settings', state.settings);
+      toast(state.settings.feedbackTo ? 'Suggestions will go to ' + state.settings.feedbackTo : 'Address cleared');
+    } else if (t.id === 'set-name') {
       const sl = byId(state.setlists, state.setlistId);
       if (sl && t.value.trim()) { sl.name = t.value.trim(); await saveSetlist(sl); renderSetlist(); }
     } else if (t.id === 'ed-file' && t.files[0]) {
       const f = t.files[0];
-      applyImported(CP.importText(await f.text(), f.name), true);
+      const raw = await f.text();
+      applyImported(CP.importText(raw, f.name), true, raw);
     } else if (t.id === 'restore-file' && t.files[0]) {
       restoreBackup(t.files[0]);
     } else if (t.id === 'import-files' && t.files.length) {
@@ -1153,7 +1252,7 @@
     const replacingAll = !t.value.trim() || (t.selectionStart === 0 && t.selectionEnd === t.value.length);
     if (!text || !replacingAll) return;
     e.preventDefault();
-    applyImported(CP.importText(text), true);
+    applyImported(CP.importText(text), true, text);
   });
 
   document.addEventListener('keydown', (e) => {
@@ -1188,5 +1287,5 @@
   });
 
   // Exposed for automated tests.
-  window.StageTabs = { state, render, renderSheet };
+  window.StageTabs = { state, render, renderSheet, composeFeedback, feedbackLink };
 })();

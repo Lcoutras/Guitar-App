@@ -14,6 +14,7 @@ Chord sheets and tabs for playing live from an iPad. Stage Tabs is a web app tha
   - Bluetooth page-turner pedals: → ↓ PageDown go forward a screen (and on to the next song at the end), ← ↑ PageUp go back, Space/Enter start or pause autoscroll.
 - **Setlists**: ordered lists for each gig. Swipe sideways or use the pedal to move between songs during the show.
 - **Backup**: save a backup file to Files or iCloud Drive, and restore it on any device.
+- **Suggestions**: send an idea or a problem from Settings, or tap "Song looks wrong? Send it" in the song editor. A song is sent along with the text that was originally pasted, so the conversion can be fixed. Sending goes by email, text message or the share sheet, and an address can be saved in Settings so the To line is filled in. No server is involved.
 
 ## Install on the iPad
 
