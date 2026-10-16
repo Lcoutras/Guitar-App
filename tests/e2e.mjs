@@ -221,6 +221,63 @@ for (const size of sizes) {
   await ctx.close();
 }
 
+// Suggestion tickets, with a fake ticket server
+{
+  const ctx = await browser.newContext({ viewport: { width: 1180, height: 820 }, serviceWorkers: 'block' });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => failures.push(`tickets: page error: ${e.message}`));
+  await page.route('**/js/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: "window.STAGE_TABS_CONFIG = { supabaseUrl: 'https://example.supabase.co', supabaseKey: 'sb_publishable_test' };" }));
+  const received = [];
+  let online = true;
+  let next = 41;
+  await page.route('https://example.supabase.co/**', async (r) => {
+    if (!online) return r.abort('internetdisconnected');
+    received.push({ url: r.request().url(), headers: r.request().headers(), body: JSON.parse(r.request().postData()) });
+    await r.fulfill({ contentType: 'application/json', body: String(++next), headers: { 'access-control-allow-origin': '*' } });
+  });
+  await page.goto(base);
+  await page.waitForSelector('.song-row');
+  await page.click('[data-act="settings"]');
+  await page.fill('#feedback-name', 'Sam');
+  await page.press('#feedback-name', 'Tab');
+  await page.click('[data-act="feedback"]');
+  check((await page.textContent('#fb-send')).includes('Send'), 'tickets: Send button missing');
+  await page.fill('#fb-msg', 'Add a metronome');
+  await page.click('#fb-send');
+  await page.waitForSelector('#toast:not([hidden])');
+  check((await page.textContent('#toast')).includes('Ticket #42'), 'tickets: no ticket number shown: ' + (await page.textContent('#toast')));
+  const r0 = received[0];
+  check(r0 && r0.url.endsWith('/rest/v1/rpc/submit_feedback'), 'tickets: wrong endpoint');
+  check(r0 && r0.headers.apikey === 'sb_publishable_test' && !r0.headers.authorization, 'tickets: wrong key headers');
+  check(r0 && r0.body.p_kind === 'idea' && r0.body.p_message === 'Add a metronome' && r0.body.p_from_name === 'Sam' && r0.body.p_song_title === '', 'tickets: wrong payload ' + JSON.stringify(r0 && r0.body));
+  await page.waitForSelector('.tickets li');
+  check((await page.textContent('.tickets')).includes('#42'), 'tickets: sent ticket not listed in Settings');
+
+  // Offline: a song report is saved, then sent when the connection returns
+  online = false;
+  await page.click('[data-act="home"]');
+  await page.click('[data-act="new-song"]');
+  await page.click('[data-act="paste-example"]');
+  await page.click('[data-act="feedback-song"]');
+  await page.fill('#fb-msg', 'Verse 2 chords are off');
+  await page.click('#fb-send');
+  await page.waitForTimeout(300);
+  check((await page.textContent('#toast')).includes('back online'), 'tickets: offline message missing');
+  check(received.length === 1, 'tickets: offline ticket should not have arrived');
+  online = true;
+  await page.evaluate(() => window.StageTabs.flushTickets());
+  await page.waitForTimeout(300);
+  const r1 = received[1];
+  check(r1 && r1.body.p_kind === 'song' && r1.body.p_song_title === 'Shenandoah' && r1.body.p_song_source.includes('Shenandoah Chords by Traditional') && r1.body.p_song_body.includes('[D]Oh Shenandoah'),
+    'tickets: queued song report wrong ' + JSON.stringify(r1 && r1.body).slice(0, 200));
+  await page.click('[data-act="cancel-edit"]');
+  await page.click('[data-act="settings"]');
+  await page.waitForSelector('.tickets li');
+  check((await page.textContent('.tickets')).includes('#43') && !(await page.textContent('.tickets')).includes('Waiting'), 'tickets: queue not cleared in Settings');
+  await page.screenshot({ path: path.join(out, 'tickets-settings.png') });
+  await ctx.close();
+}
+
 // App icons
 {
   const ctx = await browser.newContext({ viewport: { width: 512, height: 512 } });

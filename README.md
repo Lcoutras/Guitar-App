@@ -14,7 +14,7 @@ Chord sheets and tabs for playing live from an iPad. Stage Tabs is a web app tha
   - Bluetooth page-turner pedals: → ↓ PageDown go forward a screen (and on to the next song at the end), ← ↑ PageUp go back, Space/Enter start or pause autoscroll.
 - **Setlists**: ordered lists for each gig. Swipe sideways or use the pedal to move between songs during the show.
 - **Backup**: save a backup file to Files or iCloud Drive, and restore it on any device.
-- **Suggestions**: send an idea or a problem from Settings, or tap "Song looks wrong? Send it" in the song editor. A song is sent along with the text that was originally pasted, so the conversion can be fixed. Sending goes by email, text message or the share sheet, and an address can be saved in Settings so the To line is filled in. No server is involved.
+- **Suggestions**: send an idea or a problem from Settings, or tap "Song looks wrong? Send it" in the song editor. A song is sent along with the text that was originally pasted, so the conversion can be fixed. Each suggestion becomes a numbered ticket in a Supabase database (see *Suggestion tickets* below). Suggestions sent offline wait on the device and go out automatically later. If no database is set up, suggestions go by email or text message instead.
 
 ## Install on the iPad
 
@@ -29,6 +29,16 @@ Songs are stored in the iPad's browser storage. Installing to the home screen ma
 The app is a set of static files, so any static host works. GitHub Pages is the simplest: in the repository settings, go to Pages and choose "Deploy from a branch", then pick `main` and `/ (root)`. It must be served over HTTPS for offline mode and installing to work.
 
 When you change any app file, bump `VERSION` in `sw.js` so installed copies pick up the update.
+
+## Suggestion tickets
+
+Suggestions are stored in a free [Supabase](https://supabase.com) project of their own.
+
+1. Create a project at supabase.com.
+2. Open **SQL Editor → New query**, paste the contents of `supabase/feedback.sql`, and tap **Run**.
+3. In **Project Settings → API**, copy the **Project URL** and the **publishable** (anon) key into `js/config.js`.
+
+Tickets appear in **Table Editor → feedback**, newest last. Change `status` to `in progress`, `done` or `won't fix` as you work through them. The publishable key is meant to be public: the database only lets it add tickets through `submit_feedback()`, never read, change or delete them.
 
 ## Development
 

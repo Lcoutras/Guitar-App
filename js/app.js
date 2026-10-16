@@ -26,7 +26,7 @@
     settings: { stage: 'dark' },
   };
 
-  const APP_VERSION = '1.1';
+  const APP_VERSION = '1.2';
   const SPEED_MIN = 1, SPEED_MAX = 20, SPEED_DEFAULT = 6;
   const FONT_MIN = 0.6, FONT_MAX = 2.4;
 
@@ -562,8 +562,12 @@
           '<section class="settings-sec"><h3>Suggestions and problems</h3>' +
             '<p>Got an idea for the app, or a song that didn’t paste right? Send it from here. A song that looks wrong is sent along with what you originally pasted, so it can be fixed.</p>' +
             '<div class="row-actions"><button class="btn primary" data-act="feedback">' + icon('send') + 'Send a suggestion</button></div>' +
-            '<div class="field"><label for="feedback-to">Send suggestions to (email or mobile number)</label>' +
-              '<input class="input" id="feedback-to" type="text" inputmode="email" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Optional. Fills in the To line for you" value="' + esc(state.settings.feedbackTo || '') + '"></div>' +
+            (ticketsOn()
+              ? '<div class="field"><label for="feedback-name">Your name (optional)</label>' +
+                  '<input class="input" id="feedback-name" type="text" autocomplete="name" placeholder="So it’s clear who sent it" value="' + esc(state.settings.feedbackName || '') + '"></div>' +
+                '<div id="sent-tickets"></div>'
+              : '<div class="field"><label for="feedback-to">Send suggestions to (email or mobile number)</label>' +
+                  '<input class="input" id="feedback-to" type="text" inputmode="email" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Optional. Fills in the To line for you" value="' + esc(state.settings.feedbackTo || '') + '"></div>') +
           '</section>' +
           '<section class="settings-sec"><h3>Back up your songs</h3>' +
             '<p>Your ' + state.songs.length + ' songs and ' + state.setlists.length + ' setlists are saved on this device only. Save a backup file to Files or iCloud Drive now and then, and use it to move your library to a new iPad.</p>' +
@@ -596,6 +600,18 @@
           (examples ? '<section class="settings-sec"><h3>Example songs</h3><p>' + examples + ' example songs came with the app. Remove them once you have your own.</p><div class="row-actions"><button class="btn danger" data-act="remove-examples">Remove example songs</button></div></section>' : '') +
         '</div></div>' +
       '</div>';
+    showSentTickets();
+  }
+
+  async function showSentTickets() {
+    const el = $('#sent-tickets');
+    if (!el) return;
+    const [sent, queued] = await Promise.all([Store.getMeta('sentTickets', []), Store.getMeta('ticketQueue', [])]);
+    if (!sent.length && !queued.length) { el.innerHTML = ''; return; }
+    el.innerHTML = '<span class="eyebrow">Your suggestions</span><ul class="tickets">' +
+      queued.map((t) => '<li><span class="chip">Waiting to send</span> ' + esc(FEEDBACK_KINDS[t.p_kind] || '') + (t.p_song_title || t.p_message ? ': ' + esc(t.p_song_title || t.p_message.slice(0, 60)) : '') + '</li>').join('') +
+      sent.map((t) => '<li><span class="chip key">#' + t.n + '</span> ' + esc(FEEDBACK_KINDS[t.kind] || '') + (t.title ? ': ' + esc(t.title) : '') +
+        ' <span style="color:var(--muted)">· ' + new Date(t.at).toLocaleDateString() + '</span></li>').join('') + '</ul>';
   }
 
   // ----- Performance -----
@@ -955,9 +971,80 @@
     return 'mailto:' + dest.replace(/\s/g, '') + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
   }
 
+  // ---------- Tickets ----------
+  // When js/config.js points at a Supabase project, suggestions go straight
+  // into its ticket list. Ones sent while offline wait on the device and go
+  // out automatically once the connection is back.
+
+  const CFG = window.STAGE_TABS_CONFIG || {};
+  const ticketsOn = () => !!(CFG.supabaseUrl && CFG.supabaseKey);
+
+  function ticketPayload(kind, message, song) {
+    const sendSong = song && kind === 'song';
+    return {
+      p_kind: kind,
+      p_message: message.trim(),
+      p_from_name: state.settings.feedbackName || '',
+      p_song_title: sendSong ? song.title || '' : '',
+      p_song_artist: sendSong ? song.artist || '' : '',
+      p_song_body: sendSong ? song.body || '' : '',
+      p_song_source: sendSong ? song.source || '' : '',
+      p_app_version: APP_VERSION,
+      p_device: deviceName(),
+    };
+  }
+
+  async function postTicket(payload) {
+    const headers = { 'Content-Type': 'application/json', apikey: CFG.supabaseKey };
+    if (/^eyJ/.test(CFG.supabaseKey)) headers.Authorization = 'Bearer ' + CFG.supabaseKey; // older-style key
+    const res = await fetch(CFG.supabaseUrl.replace(/\/+$/, '') + '/rest/v1/rpc/submit_feedback', {
+      method: 'POST', headers, body: JSON.stringify(payload),
+    });
+    if (!res.ok) { const err = new Error('HTTP ' + res.status); err.status = res.status; throw err; }
+    return Number(await res.json());
+  }
+
+  async function rememberTicket(n, payload) {
+    const sent = await Store.getMeta('sentTickets', []);
+    sent.unshift({ n, kind: payload.p_kind, title: payload.p_song_title || payload.p_message.slice(0, 60), at: Date.now() });
+    await Store.setMeta('sentTickets', sent.slice(0, 20));
+  }
+
+  async function queueTicket(payload) {
+    const q = await Store.getMeta('ticketQueue', []);
+    q.push(payload);
+    await Store.setMeta('ticketQueue', q);
+  }
+
+  let flushing = false;
+  async function flushTickets() {
+    if (!ticketsOn() || flushing || navigator.onLine === false) return;
+    flushing = true;
+    let sent = 0;
+    try {
+      let q = await Store.getMeta('ticketQueue', []);
+      while (q.length) {
+        try {
+          await rememberTicket(await postTicket(q[0]), q[0]);
+          sent++;
+        } catch (e) {
+          // A rejected ticket would never go through, so drop it; otherwise try later.
+          if (!(e.status >= 400 && e.status < 500 && e.status !== 429)) break;
+        }
+        q = q.slice(1);
+        await Store.setMeta('ticketQueue', q);
+      }
+    } finally {
+      flushing = false;
+    }
+    if (sent) toast('Sent ' + sent + ' saved suggestion' + (sent === 1 ? '' : 's'));
+  }
+  window.addEventListener('online', flushTickets);
+
   function feedbackModal(song) {
     let kind = song ? 'song' : 'idea';
     const canShare = !!navigator.share;
+    const tickets = ticketsOn();
     const to = (state.settings.feedbackTo || '').trim();
     openModal('<header><h3>Send a suggestion</h3></header><div class="modal-body">' +
       '<div class="seg" style="margin-bottom:12px;flex-wrap:wrap">' +
@@ -967,11 +1054,12 @@
       '<div class="field"><label for="fb-msg">Your message</label>' +
         '<textarea class="input" id="fb-msg" rows="5" placeholder="' + (song ? 'What looks wrong? e.g. the chords in the chorus are shifted' : 'What would make the app better?') + '"></textarea></div>' +
       (song ? '<p style="margin:10px 0 0">“' + esc(song.title || 'Untitled') + '” is attached' + (song.source ? ', with what you originally pasted' : '') + '.</p>' : '') +
-      '<p style="margin:10px 0 0">' + (to ? 'Goes to ' + esc(to) + '.' : 'You choose who to send it to. You can save an address in Settings.') + '</p>' +
+      '<p style="margin:10px 0 0">' + (tickets ? 'Goes straight to the app’s ticket list. Works offline too: it sends once you’re back online.'
+        : (to ? 'Goes to ' + esc(to) + '.' : 'You choose who to send it to. You can save an address in Settings.')) + '</p>' +
       '</div><footer>' +
         '<button class="btn" id="fb-copy">Copy</button>' +
-        (canShare ? '<button class="btn" id="fb-share">Share…</button>' : '') +
-        '<button class="btn primary" id="fb-send">' + (/^\+?[\d\s()-]{6,}$/.test(to) ? 'Text it' : 'Email it') + '</button>' +
+        (!tickets && canShare ? '<button class="btn" id="fb-share">Share…</button>' : '') +
+        '<button class="btn primary" id="fb-send">' + (tickets ? icon('send') + 'Send' : /^\+?[\d\s()-]{6,}$/.test(to) ? 'Text it' : 'Email it') + '</button>' +
       '</footer>', (m) => {
       const msg = m.querySelector('#fb-msg');
       const text = () => composeFeedback(kind, msg.value, song);
@@ -982,9 +1070,34 @@
           m.querySelectorAll('[data-kind]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
         };
       });
-      m.querySelector('#fb-send').onclick = () => {
-        window.location.href = feedbackLink(to, subject(), text());
-        closeModal();
+      const sendBtn = m.querySelector('#fb-send');
+      sendBtn.onclick = async () => {
+        if (!tickets) {
+          window.location.href = feedbackLink(to, subject(), text());
+          closeModal();
+          return;
+        }
+        if (!msg.value.trim() && kind !== 'song') { toast('Type a message first'); msg.focus(); return; }
+        const payload = ticketPayload(kind, msg.value, song);
+        sendBtn.disabled = true;
+        sendBtn.textContent = 'Sending…';
+        try {
+          const n = await postTicket(payload);
+          await rememberTicket(n, payload);
+          closeModal();
+          toast('Sent. Thanks! Ticket #' + n);
+        } catch (e) {
+          if (e.status >= 400 && e.status < 500 && e.status !== 429) {
+            sendBtn.disabled = false;
+            sendBtn.textContent = 'Send';
+            toast('That didn’t go through. Try Copy and send it another way.');
+            return;
+          }
+          await queueTicket(payload);
+          closeModal();
+          toast('No connection right now. It’ll send automatically when you’re back online.');
+        }
+        if (state.view === 'settings') renderSettings();
       };
       const share = m.querySelector('#fb-share');
       if (share) share.onclick = async () => {
@@ -1216,7 +1329,10 @@
 
   app.addEventListener('change', async (e) => {
     const t = e.target;
-    if (t.id === 'feedback-to') {
+    if (t.id === 'feedback-name') {
+      state.settings.feedbackName = t.value.trim();
+      Store.setMeta('settings', state.settings);
+    } else if (t.id === 'feedback-to') {
       state.settings.feedbackTo = t.value.trim();
       Store.setMeta('settings', state.settings);
       toast(state.settings.feedbackTo ? 'Suggestions will go to ' + state.settings.feedbackTo : 'Address cleared');
@@ -1282,10 +1398,10 @@
     window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => {}); });
   }
 
-  loadAll().then(render, (err) => {
+  loadAll().then(() => { render(); flushTickets(); }, (err) => {
     app.innerHTML = '<div class="empty"><strong>Stage Tabs couldn’t start</strong><span>' + esc(err && err.message) + '</span></div>';
   });
 
   // Exposed for automated tests.
-  window.StageTabs = { state, render, renderSheet, composeFeedback, feedbackLink };
+  window.StageTabs = { state, render, renderSheet, composeFeedback, feedbackLink, flushTickets };
 })();

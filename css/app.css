@@ -309,3 +309,5 @@ textarea.input { min-height: 120px; resize: vertical; line-height: 1.45; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; scroll-behavior: auto !important; }
 }
+.tickets { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.tickets li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
