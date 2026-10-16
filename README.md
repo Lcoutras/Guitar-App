@@ -5,6 +5,7 @@ Chord sheets and tabs for playing live from an iPad. Stage Tabs is a web app tha
 ## What it does
 
 - **Library**: songs sorted A–Z by title or by artist, with instant search and an A–Z jump bar. "The", "A" and "An" are ignored when sorting.
+- **Song search**: type any song or artist in the search box. Besides your own songs, it searches the free MusicBrainz music catalogue. Tap a result to add it to your library with the title and artist filled in. The chords open on Ultimate Guitar, ready to copy and paste back. Only song names come from the catalogue, never lyrics or chords. Search needs an internet connection; everything else works offline.
 - **Getting songs in**: paste a chord sheet copied from any website. Chords written on the line above the lyrics are lined up over the right words automatically, guitar tab blocks are kept as they are, and section names (Verse, Chorus, Intro…) are recognised. ChordPro and plain-text files can be imported too.
 - **Find online**: buttons open a search on Ultimate Guitar or Songsterr in Safari. Copy the chords from there and paste them in. The app doesn't download from those sites itself, because their terms forbid automated copying and the lyrics are copyrighted.
 - **Stage view**: large chords above the lyrics on a dark, high-contrast screen. There is also a Daylight option for outdoor gigs.

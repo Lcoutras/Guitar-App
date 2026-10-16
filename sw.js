@@ -1,6 +1,6 @@
 // Offline support: keeps a copy of the app files so Stage Tabs opens with no
 // internet. Bump VERSION whenever any of the files below change.
-const VERSION = 'stage-tabs-v4';
+const VERSION = 'stage-tabs-v5';
 const FILES = [
   './',
   'index.html',
@@ -9,6 +9,7 @@ const FILES = [
   'js/store.js',
   'js/seed.js',
   'js/config.js',
+  'js/catalog.js',
   'js/app.js',
   'manifest.webmanifest',
   'icons/icon.svg',

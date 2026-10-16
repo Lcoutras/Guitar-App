@@ -26,7 +26,7 @@
     settings: { stage: 'dark' },
   };
 
-  const APP_VERSION = '1.3';
+  const APP_VERSION = '1.4';
   const SPEED_MIN = 1, SPEED_MAX = 20, SPEED_DEFAULT = 6;
   const FONT_MIN = 0.6, FONT_MAX = 2.4;
 
@@ -240,6 +240,7 @@
     let s = '';
     if (k.shapeKey) s += '<span class="chip key">' + esc(k.shapeKey) + '</span>';
     if (k.capo) s += '<span class="chip">Capo ' + k.capo + '</span>';
+    if (!String(song.body || '').trim()) s += '<span class="chip">No chords yet</span>';
     if (song.example) s += '<span class="chip example">Example</span>';
     return s;
   }
@@ -328,10 +329,9 @@
       return;
     }
     if (!songs.length) {
-      listEl.innerHTML = '<div class="empty"><strong>No songs match “' + esc(state.query) + '”</strong><span>Look it up online, copy the chords, then add it here.</span>' +
-        '<div class="row-actions">' + findOnlineLinks(state.query, true) + '</div>' +
-        '<button class="btn" data-act="new-song-from-query">' + icon('plus') + 'Add “' + esc(state.query) + '”</button></div>';
+      listEl.innerHTML = '<p class="catalog-note">Nothing called “' + esc(state.query) + '” in your songs yet.</p>' + catalogSection();
       $('#az').innerHTML = '';
+      searchCatalogSoon();
       return;
     }
     const groups = [];
@@ -349,10 +349,113 @@
             '<span class="row-main"><span class="row-title">' + esc(s.title || 'Untitled') + '</span><span class="row-sub">' + esc(s.artist || 'Unknown artist') + '</span></span>' +
             '<span class="row-meta">' + songChips(s) + '</span>' +
           '</button>').join('') +
-      '</div>').join('');
+      '</div>').join('') + catalogSection();
+    searchCatalogSoon();
     const present = new Set(groups.map((g) => g.letter));
     $('#az').innerHTML = '#ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map((l) =>
       '<button data-act="jump" data-letter="' + l + '" class="' + (present.has(l) ? '' : 'off') + '" aria-label="Jump to ' + l + '">' + l + '</button>').join('');
+  }
+
+  // ----- Song search (MusicBrainz catalogue) -----
+
+  const catalog = { results: [], query: '', timer: 0, ctrl: null, cache: new Map() };
+
+  function catalogSection() {
+    if (state.query.trim().length < 2) return '';
+    return '<section class="catalog" aria-label="Find a song to add">' +
+      '<div class="group-head">Find a song to add</div>' +
+      '<div id="catalog-results" aria-live="polite">' + catalogBody() + '</div>' +
+    '</section>';
+  }
+
+  function inLibrary(r) {
+    return state.songs.find((s) => window.Catalog.norm(s.title) === window.Catalog.norm(r.title) && window.Catalog.norm(s.artist) === window.Catalog.norm(r.artist));
+  }
+
+  function catalogBody() {
+    const q = state.query.trim();
+    const manual = '<div class="catalog-foot"><span>Can’t find it?</span>' + findOnlineLinks(q, true) +
+      '<button class="btn small" data-act="new-song-from-query">' + icon('plus') + 'Add it by hand</button></div>';
+    if (catalog.query !== q || catalog.status === 'loading') return '<p class="catalog-note">Searching…</p>';
+    if (catalog.status === 'offline') return '<p class="catalog-note">You’re offline. Connect to the internet to search for new songs.</p>' + manual;
+    if (catalog.status === 'error') return '<p class="catalog-note">Song search isn’t answering right now. Try again in a moment.</p>' + manual;
+    if (!catalog.results.length) return '<p class="catalog-note">No songs found for “' + esc(q) + '”.</p>' + manual;
+    return catalog.results.map((r, i) => {
+      const have = inLibrary(r);
+      return '<button class="song-row catalog-row" data-act="catalog-add" data-i="' + i + '">' +
+        '<span class="row-main"><span class="row-title">' + esc(r.title) + '</span>' +
+        '<span class="row-sub">' + esc(r.artist) + (r.album && r.album !== r.title ? ' · ' + esc(r.album) : '') + (r.year ? ' · ' + r.year : '') + '</span></span>' +
+        '<span class="row-meta">' + (have ? '<span class="chip">In your songs</span>' : '<span class="chip key">' + icon('plus') + 'Add</span>') + '</span>' +
+      '</button>';
+    }).join('') + manual;
+  }
+
+  function showCatalog() {
+    const el = $('#catalog-results');
+    if (el) el.innerHTML = catalogBody();
+  }
+
+  function searchCatalogSoon() {
+    clearTimeout(catalog.timer);
+    const q = state.query.trim();
+    if (q.length < 2) return;
+    if (catalog.cache.has(q)) {
+      Object.assign(catalog, { query: q, status: 'done', results: catalog.cache.get(q) });
+      showCatalog();
+      return;
+    }
+    if (catalog.query !== q) catalog.status = 'loading';
+    catalog.timer = setTimeout(() => searchCatalog(q), 450);
+  }
+
+  async function searchCatalog(q, retried) {
+    if (catalog.ctrl) catalog.ctrl.abort();
+    catalog.query = q;
+    if (navigator.onLine === false) { catalog.status = 'offline'; showCatalog(); return; }
+    catalog.status = 'loading';
+    const ctrl = new AbortController();
+    catalog.ctrl = ctrl;
+    const timeout = setTimeout(() => ctrl.abort(), 9000);
+    try {
+      const res = await fetch(window.Catalog.searchUrl(q), { signal: ctrl.signal, headers: { Accept: 'application/json' } });
+      if (res.status === 503 && !retried) { // busy: MusicBrainz allows about one search a second
+        clearTimeout(timeout);
+        await new Promise((r) => setTimeout(r, 1200));
+        if (state.query.trim() === q) return searchCatalog(q, true);
+        return;
+      }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const results = window.Catalog.parse(await res.json());
+      catalog.cache.set(q, results);
+      if (state.query.trim() !== q) return;
+      Object.assign(catalog, { status: 'done', results });
+    } catch (e) {
+      if (ctrl.signal.aborted && catalog.ctrl !== ctrl) return; // replaced by a newer search
+      if (state.query.trim() !== q) return;
+      catalog.status = navigator.onLine === false ? 'offline' : 'error';
+    } finally {
+      clearTimeout(timeout);
+    }
+    showCatalog();
+  }
+
+  // Adds a song from search: it goes into the library straight away, the
+  // chords open on Ultimate Guitar, and the editor waits for the paste.
+  async function addFromCatalog(r) {
+    const have = inLibrary(r);
+    if (have) {
+      state.selectedId = have.id;
+      if (window.matchMedia('(min-width: 900px)').matches) { state.query = ''; render(); } else openPerform(have.id);
+      return;
+    }
+    const q = encodeURIComponent(r.title + ' ' + r.artist);
+    try { window.open('https://www.ultimate-guitar.com/search.php?search_type=title&value=' + q, '_blank', 'noopener'); } catch (e) { /* links in the editor still work */ }
+    const song = newSong({ title: r.title, artist: r.artist });
+    await saveSong(song);
+    state.selectedId = song.id;
+    startEdit(song, false, 'library');
+    state.edit.fromCatalog = true;
+    renderEdit();
   }
 
   function updatePreview() {
@@ -458,7 +561,7 @@
                 Array.from({ length: 10 }, (_, i) => '<option value="' + i + '"' + (Number(d.capo) === i ? ' selected' : '') + '>' + (i ? 'Fret ' + i : 'None') + '</option>').join('') + '</select></div>' +
               '<div class="field"><label for="ed-tempo">Tempo / notes</label><input class="input" id="ed-tempo" value="' + esc(d.tempo) + '" placeholder="e.g. 92 bpm" autocomplete="off"></div>' +
             '</div>' +
-            '<div class="find-online" id="find-online"><p>Find the chords online. Copy them from the page, come back, and paste them below.</p>' + findOnlineLinks(q, true) + '</div>' +
+            '<div class="find-online' + (e.fromCatalog && !d.body ? ' highlight' : '') + '" id="find-online"><p>' + findOnlineText() + '</p>' + findOnlineLinks(q, true) + '</div>' +
             '<div class="mobile-tabs"><div class="seg">' +
               '<button data-act="ed-pane" data-pane="edit" aria-pressed="' + (e.pane === 'edit') + '">Chord sheet</button>' +
               '<button data-act="ed-pane" data-pane="preview" aria-pressed="' + (e.pane === 'preview') + '">Preview</button>' +
@@ -490,6 +593,13 @@
     updateEditPreview();
   }
 
+  function findOnlineText() {
+    const e = state.edit;
+    if (e && e.fromCatalog && !(e.draft.body || '').trim())
+      return '<b>Added to your songs.</b> The chords opened on Ultimate Guitar. Copy them there, come back here, and paste them in the box below. Didn’t open? Tap a button:';
+    return 'Find the chords online. Copy them from the page, come back, and paste them below.';
+  }
+
   function readEditForm() {
     const d = state.edit.draft;
     const v = (id) => { const el = document.getElementById(id); return el ? el.value : undefined; };
@@ -516,7 +626,7 @@
       fitTabs(app);
       const q = [d.title, d.artist].filter(Boolean).join(' ');
       const fo = $('#find-online');
-      if (fo) fo.innerHTML = '<p>Find the chords online. Copy them from the page, come back, and paste them below.</p>' + findOnlineLinks(q, true);
+      if (fo) fo.innerHTML = '<p>' + findOnlineText() + '</p>' + findOnlineLinks(q, true);
     }, 60);
   }
 
@@ -1211,6 +1321,7 @@
       case 'settings': state.view = 'settings'; render(); break;
       case 'home': state.view = 'library'; render(); break;
       case 'new-song': startEdit(newSong(), true, 'library'); break;
+      case 'catalog-add': addFromCatalog(catalog.results[Number(el.dataset.i)]); break;
       case 'new-song-from-query': startEdit(newSong({ title: state.query.trim() }), true, 'library'); break;
       case 'edit-song': stopScroll(); startEdit(byId(state.songs, id), false, state.view); break;
       case 'add-to-setlist': setlistChooser(id); break;
