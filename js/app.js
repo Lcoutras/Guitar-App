@@ -26,7 +26,7 @@
     settings: { stage: 'dark' },
   };
 
-  const APP_VERSION = '1.2';
+  const APP_VERSION = '1.4';
   const SPEED_MIN = 1, SPEED_MAX = 20, SPEED_DEFAULT = 6;
   const FONT_MIN = 0.6, FONT_MAX = 2.4;
 
@@ -58,6 +58,7 @@
     wand: '<path d="m15 4 5 5L9 20H4v-5z"/><path d="M13 6l5 5"/>',
     download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5M12 15V3"/>',
     send: '<path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/>',
+    refresh: '<path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/>',
     upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5M12 3v12"/>',
   };
   const icon = (name) => '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">' + ICONS[name] + '</svg>';
@@ -239,6 +240,7 @@
     let s = '';
     if (k.shapeKey) s += '<span class="chip key">' + esc(k.shapeKey) + '</span>';
     if (k.capo) s += '<span class="chip">Capo ' + k.capo + '</span>';
+    if (!String(song.body || '').trim()) s += '<span class="chip">No chords yet</span>';
     if (song.example) s += '<span class="chip example">Example</span>';
     return s;
   }
@@ -289,6 +291,7 @@
             '<button role="tab" data-act="tab" data-tab="songs" aria-selected="' + (state.tab === 'songs') + '">Songs</button>' +
             '<button role="tab" data-act="tab" data-tab="setlists" aria-selected="' + (state.tab === 'setlists') + '">Setlists</button>' +
           '</div>' +
+          (isInstalled() ? '<button class="btn icon-only ghost" data-act="refresh" aria-label="Refresh the app">' + icon('refresh') + '</button>' : '') +
           '<button class="btn icon-only ghost" data-act="settings" aria-label="Settings and backup">' + icon('gear') + '</button>' +
           (state.tab === 'songs'
             ? '<button class="btn primary" data-act="new-song">' + icon('plus') + 'Add song</button>'
@@ -326,10 +329,9 @@
       return;
     }
     if (!songs.length) {
-      listEl.innerHTML = '<div class="empty"><strong>No songs match “' + esc(state.query) + '”</strong><span>Look it up online, copy the chords, then add it here.</span>' +
-        '<div class="row-actions">' + findOnlineLinks(state.query, true) + '</div>' +
-        '<button class="btn" data-act="new-song-from-query">' + icon('plus') + 'Add “' + esc(state.query) + '”</button></div>';
+      listEl.innerHTML = '<p class="catalog-note">Nothing called “' + esc(state.query) + '” in your songs yet.</p>' + catalogSection();
       $('#az').innerHTML = '';
+      searchCatalogSoon();
       return;
     }
     const groups = [];
@@ -347,10 +349,113 @@
             '<span class="row-main"><span class="row-title">' + esc(s.title || 'Untitled') + '</span><span class="row-sub">' + esc(s.artist || 'Unknown artist') + '</span></span>' +
             '<span class="row-meta">' + songChips(s) + '</span>' +
           '</button>').join('') +
-      '</div>').join('');
+      '</div>').join('') + catalogSection();
+    searchCatalogSoon();
     const present = new Set(groups.map((g) => g.letter));
     $('#az').innerHTML = '#ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map((l) =>
       '<button data-act="jump" data-letter="' + l + '" class="' + (present.has(l) ? '' : 'off') + '" aria-label="Jump to ' + l + '">' + l + '</button>').join('');
+  }
+
+  // ----- Song search (MusicBrainz catalogue) -----
+
+  const catalog = { results: [], query: '', timer: 0, ctrl: null, cache: new Map() };
+
+  function catalogSection() {
+    if (state.query.trim().length < 2) return '';
+    return '<section class="catalog" aria-label="Find a song to add">' +
+      '<div class="group-head">Find a song to add</div>' +
+      '<div id="catalog-results" aria-live="polite">' + catalogBody() + '</div>' +
+    '</section>';
+  }
+
+  function inLibrary(r) {
+    return state.songs.find((s) => window.Catalog.norm(s.title) === window.Catalog.norm(r.title) && window.Catalog.norm(s.artist) === window.Catalog.norm(r.artist));
+  }
+
+  function catalogBody() {
+    const q = state.query.trim();
+    const manual = '<div class="catalog-foot"><span>Can’t find it?</span>' + findOnlineLinks(q, true) +
+      '<button class="btn small" data-act="new-song-from-query">' + icon('plus') + 'Add it by hand</button></div>';
+    if (catalog.query !== q || catalog.status === 'loading') return '<p class="catalog-note">Searching…</p>';
+    if (catalog.status === 'offline') return '<p class="catalog-note">You’re offline. Connect to the internet to search for new songs.</p>' + manual;
+    if (catalog.status === 'error') return '<p class="catalog-note">Song search isn’t answering right now. Try again in a moment.</p>' + manual;
+    if (!catalog.results.length) return '<p class="catalog-note">No songs found for “' + esc(q) + '”.</p>' + manual;
+    return catalog.results.map((r, i) => {
+      const have = inLibrary(r);
+      return '<button class="song-row catalog-row" data-act="catalog-add" data-i="' + i + '">' +
+        '<span class="row-main"><span class="row-title">' + esc(r.title) + '</span>' +
+        '<span class="row-sub">' + esc(r.artist) + (r.album && r.album !== r.title ? ' · ' + esc(r.album) : '') + (r.year ? ' · ' + r.year : '') + '</span></span>' +
+        '<span class="row-meta">' + (have ? '<span class="chip">In your songs</span>' : '<span class="chip key">' + icon('plus') + 'Add</span>') + '</span>' +
+      '</button>';
+    }).join('') + manual;
+  }
+
+  function showCatalog() {
+    const el = $('#catalog-results');
+    if (el) el.innerHTML = catalogBody();
+  }
+
+  function searchCatalogSoon() {
+    clearTimeout(catalog.timer);
+    const q = state.query.trim();
+    if (q.length < 2) return;
+    if (catalog.cache.has(q)) {
+      Object.assign(catalog, { query: q, status: 'done', results: catalog.cache.get(q) });
+      showCatalog();
+      return;
+    }
+    if (catalog.query !== q) catalog.status = 'loading';
+    catalog.timer = setTimeout(() => searchCatalog(q), 450);
+  }
+
+  async function searchCatalog(q, retried) {
+    if (catalog.ctrl) catalog.ctrl.abort();
+    catalog.query = q;
+    if (navigator.onLine === false) { catalog.status = 'offline'; showCatalog(); return; }
+    catalog.status = 'loading';
+    const ctrl = new AbortController();
+    catalog.ctrl = ctrl;
+    const timeout = setTimeout(() => ctrl.abort(), 9000);
+    try {
+      const res = await fetch(window.Catalog.searchUrl(q), { signal: ctrl.signal, headers: { Accept: 'application/json' } });
+      if (res.status === 503 && !retried) { // busy: MusicBrainz allows about one search a second
+        clearTimeout(timeout);
+        await new Promise((r) => setTimeout(r, 1200));
+        if (state.query.trim() === q) return searchCatalog(q, true);
+        return;
+      }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const results = window.Catalog.parse(await res.json());
+      catalog.cache.set(q, results);
+      if (state.query.trim() !== q) return;
+      Object.assign(catalog, { status: 'done', results });
+    } catch (e) {
+      if (ctrl.signal.aborted && catalog.ctrl !== ctrl) return; // replaced by a newer search
+      if (state.query.trim() !== q) return;
+      catalog.status = navigator.onLine === false ? 'offline' : 'error';
+    } finally {
+      clearTimeout(timeout);
+    }
+    showCatalog();
+  }
+
+  // Adds a song from search: it goes into the library straight away, the
+  // chords open on Ultimate Guitar, and the editor waits for the paste.
+  async function addFromCatalog(r) {
+    const have = inLibrary(r);
+    if (have) {
+      state.selectedId = have.id;
+      if (window.matchMedia('(min-width: 900px)').matches) { state.query = ''; render(); } else openPerform(have.id);
+      return;
+    }
+    const q = encodeURIComponent(r.title + ' ' + r.artist);
+    try { window.open('https://www.ultimate-guitar.com/search.php?search_type=title&value=' + q, '_blank', 'noopener'); } catch (e) { /* links in the editor still work */ }
+    const song = newSong({ title: r.title, artist: r.artist });
+    await saveSong(song);
+    state.selectedId = song.id;
+    startEdit(song, false, 'library');
+    state.edit.fromCatalog = true;
+    renderEdit();
   }
 
   function updatePreview() {
@@ -456,7 +561,7 @@
                 Array.from({ length: 10 }, (_, i) => '<option value="' + i + '"' + (Number(d.capo) === i ? ' selected' : '') + '>' + (i ? 'Fret ' + i : 'None') + '</option>').join('') + '</select></div>' +
               '<div class="field"><label for="ed-tempo">Tempo / notes</label><input class="input" id="ed-tempo" value="' + esc(d.tempo) + '" placeholder="e.g. 92 bpm" autocomplete="off"></div>' +
             '</div>' +
-            '<div class="find-online" id="find-online"><p>Find the chords online. Copy them from the page, come back, and paste them below.</p>' + findOnlineLinks(q, true) + '</div>' +
+            '<div class="find-online' + (e.fromCatalog && !d.body ? ' highlight' : '') + '" id="find-online"><p>' + findOnlineText() + '</p>' + findOnlineLinks(q, true) + '</div>' +
             '<div class="mobile-tabs"><div class="seg">' +
               '<button data-act="ed-pane" data-pane="edit" aria-pressed="' + (e.pane === 'edit') + '">Chord sheet</button>' +
               '<button data-act="ed-pane" data-pane="preview" aria-pressed="' + (e.pane === 'preview') + '">Preview</button>' +
@@ -488,6 +593,13 @@
     updateEditPreview();
   }
 
+  function findOnlineText() {
+    const e = state.edit;
+    if (e && e.fromCatalog && !(e.draft.body || '').trim())
+      return '<b>Added to your songs.</b> The chords opened on Ultimate Guitar. Copy them there, come back here, and paste them in the box below. Didn’t open? Tap a button:';
+    return 'Find the chords online. Copy them from the page, come back, and paste them below.';
+  }
+
   function readEditForm() {
     const d = state.edit.draft;
     const v = (id) => { const el = document.getElementById(id); return el ? el.value : undefined; };
@@ -514,7 +626,7 @@
       fitTabs(app);
       const q = [d.title, d.artist].filter(Boolean).join(' ');
       const fo = $('#find-online');
-      if (fo) fo.innerHTML = '<p>Find the chords online. Copy them from the page, come back, and paste them below.</p>' + findOnlineLinks(q, true);
+      if (fo) fo.innerHTML = '<p>' + findOnlineText() + '</p>' + findOnlineLinks(q, true);
     }, 60);
   }
 
@@ -590,6 +702,10 @@
               '<span><kbd>Space</kbd> <kbd>Enter</kbd></span><span>Start or pause autoscroll.</span>' +
               '<span><kbd>Esc</kbd></span><span>Close the song.</span>' +
             '</div>' +
+          '</section>' +
+          '<section class="settings-sec"><h3>Updates</h3>' +
+            '<p>You’re on version ' + APP_VERSION + '. New versions arrive on their own when you’re online, and a message appears when one is ready.</p>' +
+            '<div class="row-actions"><button class="btn" data-act="refresh">' + icon('refresh') + 'Check for updates and refresh</button></div>' +
           '</section>' +
           '<section class="settings-sec"><h3>Use it like an app</h3>' +
             '<p>In Safari on the iPad, tap Share, then Add to Home Screen. Stage Tabs then opens full screen, works with no internet, and the iPad is less likely to clear your songs.</p>' +
@@ -1205,6 +1321,7 @@
       case 'settings': state.view = 'settings'; render(); break;
       case 'home': state.view = 'library'; render(); break;
       case 'new-song': startEdit(newSong(), true, 'library'); break;
+      case 'catalog-add': addFromCatalog(catalog.results[Number(el.dataset.i)]); break;
       case 'new-song-from-query': startEdit(newSong({ title: state.query.trim() }), true, 'library'); break;
       case 'edit-song': stopScroll(); startEdit(byId(state.songs, id), false, state.view); break;
       case 'add-to-setlist': setlistChooser(id); break;
@@ -1271,6 +1388,7 @@
 
       // Settings
       case 'export': exportBackup(); break;
+      case 'refresh': refreshApp(); break;
       case 'feedback': feedbackModal(null); break;
       case 'feedback-song': feedbackModal(Object.assign({}, readEditForm())); break;
       case 'stage':
@@ -1287,6 +1405,7 @@
       // Performance
       case 'exit-perform': {
         stopScroll(); releaseWakeLock();
+        if (state.updateReady) { state.updateReady = false; setTimeout(showUpdateReady, 300); }
         const fromSet = state.perform && state.perform.setlistId;
         state.view = fromSet ? 'setlist' : 'library';
         if (fromSet) state.setlistId = fromSet;
@@ -1394,8 +1513,52 @@
 
   // ---------- Start ----------
 
+  // ---------- Updates ----------
+  // An app saved to the Home Screen or desktop has no browser reload button,
+  // so it gets its own. The app also checks for a new version whenever it is
+  // brought back to the front, and offers to refresh when one is ready.
+
+  function isInstalled() {
+    try {
+      return window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches ||
+        window.matchMedia('(display-mode: window-controls-overlay)').matches || window.matchMedia('(display-mode: minimal-ui)').matches;
+    } catch (e) { return false; }
+  }
+
+  let swReg = null;
+  async function refreshApp() {
+    toast('Checking for updates…');
+    try { if (swReg) await swReg.update(); } catch (e) { /* offline: reload from the saved copy */ }
+    window.location.reload();
+  }
+
+  function showUpdateReady() {
+    // Don't interrupt a song in progress; offer it next time the library is shown.
+    if (state.view === 'perform') { state.updateReady = true; return; }
+    if (document.getElementById('update-bar')) return;
+    const bar = document.createElement('div');
+    bar.id = 'update-bar';
+    bar.setAttribute('role', 'status');
+    bar.innerHTML = '<span>A new version of Stage Tabs is ready.</span><button class="btn small primary" data-update="go">' + icon('refresh') + 'Refresh</button><button class="btn small ghost icon-only" data-update="later" aria-label="Later">' + icon('x') + '</button>';
+    bar.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-update]');
+      if (!b) return;
+      if (b.dataset.update === 'go') window.location.reload(); else bar.remove();
+    });
+    document.body.appendChild(bar);
+  }
+
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol) && !window.__STAGE_TABS_PREVIEW__) {
-    window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => {}); });
+    window.addEventListener('load', async () => {
+      try {
+        const hadController = !!navigator.serviceWorker.controller;
+        swReg = await navigator.serviceWorker.register('sw.js');
+        navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController) showUpdateReady(); });
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible' && navigator.onLine !== false) swReg.update().catch(() => {});
+        });
+      } catch (e) { /* offline support unavailable */ }
+    });
   }
 
   loadAll().then(() => { render(); flushTickets(); }, (err) => {
@@ -1403,5 +1566,5 @@
   });
 
   // Exposed for automated tests.
-  window.StageTabs = { state, render, renderSheet, composeFeedback, feedbackLink, flushTickets };
+  window.StageTabs = { state, render, renderSheet, composeFeedback, feedbackLink, flushTickets, showUpdateReady, isInstalled };
 })();
