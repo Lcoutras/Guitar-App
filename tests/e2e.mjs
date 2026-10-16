@@ -221,6 +221,43 @@ for (const size of sizes) {
   await ctx.close();
 }
 
+// Installed app (Home Screen / desktop): refresh button and update message
+{
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
+  await ctx.addInitScript(() => {
+    const real = window.matchMedia.bind(window);
+    window.matchMedia = (q) => (/display-mode:\s*standalone/.test(q) ? { matches: true, media: q, addEventListener() {}, removeEventListener() {} } : real(q));
+  });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => failures.push(`installed: page error: ${e.message}`));
+  await page.goto(base);
+  await page.waitForSelector('.song-row');
+  check(!!(await page.$('.topbar [data-act="refresh"]')), 'installed: no refresh button in the header');
+  await page.evaluate(() => window.StageTabs.showUpdateReady());
+  await page.waitForSelector('#update-bar');
+  await page.screenshot({ path: path.join(out, 'installed-update-ready.png') });
+  await Promise.all([page.waitForEvent('load'), page.click('#update-bar [data-update="go"]')]);
+  await page.waitForSelector('.song-row');
+  await Promise.all([page.waitForEvent('load'), page.click('.topbar [data-act="refresh"]')]);
+  await page.waitForSelector('.song-row');
+  // An update during a song waits until the song is closed
+  await page.click('.song-row');
+  await page.click('#preview [data-act="perform"]');
+  await page.evaluate(() => window.StageTabs.showUpdateReady());
+  check(!(await page.$('#update-bar')), 'installed: update message interrupted a song');
+  await page.click('[data-act="exit-perform"]');
+  await page.waitForSelector('#update-bar', { timeout: 2000 }).catch(() => failures.push('installed: update message not shown after the song'));
+  await ctx.close();
+}
+{
+  const { ctx, page } = await newPage('browser-tab', { width: 1180, height: 820 });
+  check(!(await page.$('.topbar [data-act="refresh"]')), 'browser tab: refresh button should only show in the installed app');
+  await page.click('[data-act="settings"]');
+  check((await page.textContent('.settings-sec:has([data-act="refresh"])')).includes('version 1.3'), 'settings: version not shown');
+  await Promise.all([page.waitForEvent('load'), page.click('.settings-sec [data-act="refresh"]')]);
+  await ctx.close();
+}
+
 // Suggestion tickets, with a fake ticket server
 {
   const ctx = await browser.newContext({ viewport: { width: 1180, height: 820 }, serviceWorkers: 'block' });

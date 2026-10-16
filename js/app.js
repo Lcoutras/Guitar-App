@@ -26,7 +26,7 @@
     settings: { stage: 'dark' },
   };
 
-  const APP_VERSION = '1.2';
+  const APP_VERSION = '1.3';
   const SPEED_MIN = 1, SPEED_MAX = 20, SPEED_DEFAULT = 6;
   const FONT_MIN = 0.6, FONT_MAX = 2.4;
 
@@ -58,6 +58,7 @@
     wand: '<path d="m15 4 5 5L9 20H4v-5z"/><path d="M13 6l5 5"/>',
     download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5M12 15V3"/>',
     send: '<path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/>',
+    refresh: '<path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/>',
     upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5M12 3v12"/>',
   };
   const icon = (name) => '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">' + ICONS[name] + '</svg>';
@@ -289,6 +290,7 @@
             '<button role="tab" data-act="tab" data-tab="songs" aria-selected="' + (state.tab === 'songs') + '">Songs</button>' +
             '<button role="tab" data-act="tab" data-tab="setlists" aria-selected="' + (state.tab === 'setlists') + '">Setlists</button>' +
           '</div>' +
+          (isInstalled() ? '<button class="btn icon-only ghost" data-act="refresh" aria-label="Refresh the app">' + icon('refresh') + '</button>' : '') +
           '<button class="btn icon-only ghost" data-act="settings" aria-label="Settings and backup">' + icon('gear') + '</button>' +
           (state.tab === 'songs'
             ? '<button class="btn primary" data-act="new-song">' + icon('plus') + 'Add song</button>'
@@ -590,6 +592,10 @@
               '<span><kbd>Space</kbd> <kbd>Enter</kbd></span><span>Start or pause autoscroll.</span>' +
               '<span><kbd>Esc</kbd></span><span>Close the song.</span>' +
             '</div>' +
+          '</section>' +
+          '<section class="settings-sec"><h3>Updates</h3>' +
+            '<p>You’re on version ' + APP_VERSION + '. New versions arrive on their own when you’re online, and a message appears when one is ready.</p>' +
+            '<div class="row-actions"><button class="btn" data-act="refresh">' + icon('refresh') + 'Check for updates and refresh</button></div>' +
           '</section>' +
           '<section class="settings-sec"><h3>Use it like an app</h3>' +
             '<p>In Safari on the iPad, tap Share, then Add to Home Screen. Stage Tabs then opens full screen, works with no internet, and the iPad is less likely to clear your songs.</p>' +
@@ -1271,6 +1277,7 @@
 
       // Settings
       case 'export': exportBackup(); break;
+      case 'refresh': refreshApp(); break;
       case 'feedback': feedbackModal(null); break;
       case 'feedback-song': feedbackModal(Object.assign({}, readEditForm())); break;
       case 'stage':
@@ -1287,6 +1294,7 @@
       // Performance
       case 'exit-perform': {
         stopScroll(); releaseWakeLock();
+        if (state.updateReady) { state.updateReady = false; setTimeout(showUpdateReady, 300); }
         const fromSet = state.perform && state.perform.setlistId;
         state.view = fromSet ? 'setlist' : 'library';
         if (fromSet) state.setlistId = fromSet;
@@ -1394,8 +1402,52 @@
 
   // ---------- Start ----------
 
+  // ---------- Updates ----------
+  // An app saved to the Home Screen or desktop has no browser reload button,
+  // so it gets its own. The app also checks for a new version whenever it is
+  // brought back to the front, and offers to refresh when one is ready.
+
+  function isInstalled() {
+    try {
+      return window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches ||
+        window.matchMedia('(display-mode: window-controls-overlay)').matches || window.matchMedia('(display-mode: minimal-ui)').matches;
+    } catch (e) { return false; }
+  }
+
+  let swReg = null;
+  async function refreshApp() {
+    toast('Checking for updates…');
+    try { if (swReg) await swReg.update(); } catch (e) { /* offline: reload from the saved copy */ }
+    window.location.reload();
+  }
+
+  function showUpdateReady() {
+    // Don't interrupt a song in progress; offer it next time the library is shown.
+    if (state.view === 'perform') { state.updateReady = true; return; }
+    if (document.getElementById('update-bar')) return;
+    const bar = document.createElement('div');
+    bar.id = 'update-bar';
+    bar.setAttribute('role', 'status');
+    bar.innerHTML = '<span>A new version of Stage Tabs is ready.</span><button class="btn small primary" data-update="go">' + icon('refresh') + 'Refresh</button><button class="btn small ghost icon-only" data-update="later" aria-label="Later">' + icon('x') + '</button>';
+    bar.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-update]');
+      if (!b) return;
+      if (b.dataset.update === 'go') window.location.reload(); else bar.remove();
+    });
+    document.body.appendChild(bar);
+  }
+
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol) && !window.__STAGE_TABS_PREVIEW__) {
-    window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => {}); });
+    window.addEventListener('load', async () => {
+      try {
+        const hadController = !!navigator.serviceWorker.controller;
+        swReg = await navigator.serviceWorker.register('sw.js');
+        navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController) showUpdateReady(); });
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible' && navigator.onLine !== false) swReg.update().catch(() => {});
+        });
+      } catch (e) { /* offline support unavailable */ }
+    });
   }
 
   loadAll().then(() => { render(); flushTickets(); }, (err) => {
@@ -1403,5 +1455,5 @@
   });
 
   // Exposed for automated tests.
-  window.StageTabs = { state, render, renderSheet, composeFeedback, feedbackLink, flushTickets };
+  window.StageTabs = { state, render, renderSheet, composeFeedback, feedbackLink, flushTickets, showUpdateReady, isInstalled };
 })();
