@@ -3,6 +3,6 @@
 // The publishable key is meant to be public; the database only lets it add
 // tickets, not read or change them. Leave both empty to send by email instead.
 window.STAGE_TABS_CONFIG = {
-  supabaseUrl: '',
-  supabaseKey: '',
+  supabaseUrl: 'https://vjumhkhokdoyghrkzmhs.supabase.co',
+  supabaseKey: 'sb_publishable_f7sBOICmEh0nmIGQQokSmg__8YvcMwW',
 };

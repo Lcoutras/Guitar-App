@@ -1,6 +1,6 @@
 // Offline support: keeps a copy of the app files so Stage Tabs opens with no
 // internet. Bump VERSION whenever any of the files below change.
-const VERSION = 'stage-tabs-v6';
+const VERSION = 'stage-tabs-v7';
 const FILES = [
   './',
   'index.html',
