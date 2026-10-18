@@ -311,3 +311,19 @@ textarea.input { min-height: 120px; resize: vertical; line-height: 1.45; }
 }
 .tickets { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .tickets li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+#update-bar {
+  position: fixed; z-index: 55; left: 50%; transform: translateX(-50%);
+  bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center;
+  max-width: calc(100% - 32px); padding: 10px 12px 10px 16px; border-radius: 14px;
+  background: var(--surface-2); border: 1px solid var(--accent); color: var(--fg); box-shadow: var(--shadow); font-weight: 600;
+}
+.catalog { margin-top: 18px; }
+.catalog-note { margin: 12px 4px; color: var(--muted); }
+.catalog-row .chip.key .icon { width: 0.95em; height: 0.95em; }
+.catalog-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 14px 4px; color: var(--muted); }
+.find-online.highlight { border-style: solid; border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.find-online.highlight p { color: var(--fg); }
+.copy-steps { padding: 12px 14px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); color: var(--muted); font-size: 0.95rem; }
+.copy-steps b { color: var(--fg); }
+.copy-steps ol { margin: 8px 0 0; padding-left: 1.3em; display: flex; flex-direction: column; gap: 4px; }

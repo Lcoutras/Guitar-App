@@ -19,7 +19,7 @@
   const MINOR_FLAT = [true, false, true, true, false, true, false, true, false, false, true, false];
 
   const CHORD_RE = /^[A-G][#b]?(?:maj|min|mi|m|M|dim|aug|sus|add|°|ø|\+|-)?\d*(?:(?:maj|min|sus|add|dim|aug|no|b|#|\+|-|\/)?\d+)*(?:sus|aug|dim|\+)?(?:\([^)]*\))?(?:\/[A-G][#b]?)?\*?$/;
-  const NOISE_RE = /^(?:\|+:?|:?\|+|-+|~+|x\d+|\d+x|\(x?\d+x?\)|\(|\)|N\.?C\.?|%|\/+|\.+|\*+)$/i;
+  const NOISE_RE = /^(?:\|+:?|:?\|+|-+|~+|x\d{1,2}|\d{1,2}x|\(x?\d+x?\)|\(|\)|N\.?C\.?|%|\/+|\.+|\*+)$/i;
   const NC_RE = /^N\.?C\.?$/i;
   const SECTION_WORDS = 'intro|verse|chorus|pre-?chorus|post-?chorus|bridge|outro|solo|interlude|instrumental|refrain|coda|tag|hook|break|ending|riff|middle 8';
   const SECTION_RE = new RegExp('^\\s*\\[?((?:' + SECTION_WORDS + ')(?:\\s*\\d+)?(?:\\s*\\(.*\\))?)\\]?\\s*:?\\s*$', 'i');
@@ -331,6 +331,25 @@
       .split('\n').map((l) => expandTabs(l).replace(/\s+$/, '')).join('\n');
   }
 
+  // Text that comes along when a whole chord page is copied: the site's
+  // buttons, ratings, song details and chord-diagram fingerings.
+  const PAGE_JUNK = [
+    /^(difficulty|author|artist|song|album|year|genre|last (edit|update|edited)( on)?|edited by|submitted by|contributors?|rating|ratings|views?|hits|version|ver|type|level)\s*[:：]/i,
+    /^(chords|tab|tabs|lyrics|print|edit|report( bad tab)?|favou?rites?|add to (favou?rites|playlist)|autoscroll|auto ?scroll|transpose|simplify|font|text size|show (more|less|all)|download( pdf)?|sign (in|up)|log ?in|try pro|upgrade|more versions?|other versions?|all versions|chord diagrams?|strumming|tuner|mixer|rating|ratings|comments|x|\+|-|[0-9]+)$/i,
+    /^[\d.,]+\s*k?\s*(views?|ratings?|votes?|favou?rites?|likes?|comments?)$/i,
+    /^(rating|rated)\s*[\d.]+/i,
+    /^\(?[\d.,]+\)?$/,
+    /^capo\s*[:\-]?\s*(no capo|none|no|0)$/i,
+    /^(ultimate[- ]guitar|ug)(\.com)?\b/i,
+    /^(©|copyright\b|all rights reserved)/i,
+  ];
+  // Fingerings such as "x32010", "022000" or "Em 0 2 2 0 0 0".
+  const DIAGRAM_RE = /^([A-G][#b]?\S*\s+)?([x0-9]{6}|([x0-9]{1,2}\s+){5}[x0-9]{1,2})(\s+[x0-9]{6})*$/i;
+
+  function isPageJunk(t) {
+    return PAGE_JUNK.some((re) => re.test(t)) || DIAGRAM_RE.test(t);
+  }
+
   // Converts chords-above-lyrics text to ChordPro. Returns { body, meta, stats }.
   function convert(text) {
     const lines = undoDoubleSpacing(cleanPasted(text).split('\n'));
@@ -338,12 +357,16 @@
     const out = [];
     let merged = 0;
 
-    // A heading such as "Song Name Chords by Artist" at the very top.
-    while (lines.length && !lines[0].trim()) lines.shift();
-    if (lines.length) {
-      const h = lines[0].match(/^\s*(.+?)\s+(?:official\s+)?(?:chords|tabs?|ukulele chords|bass tabs?|guitar chords)\s+by\s+(.+?)\s*$/i);
-      if (h) { meta.title = h[1].trim(); meta.artist = h[2].trim(); lines.shift(); }
+    // A heading such as "Song Name Chords by Artist". When a whole page was
+    // copied, everything above it is the site's menus, so it is dropped.
+    const HEADING_RE = /^\s*(.+?)\s+(?:official\s+)?(?:chords|tabs?|ukulele chords|bass tabs?|guitar chords|guitar pro)\s+by\s+(.+?)\s*$/i;
+    const hi = lines.slice(0, 80).findIndex((l) => HEADING_RE.test(l));
+    if (hi >= 0) {
+      const h = lines[hi].match(HEADING_RE);
+      meta.title = h[1].trim(); meta.artist = h[2].trim();
+      lines.splice(0, hi + 1);
     }
+    while (lines.length && !lines[0].trim()) lines.shift();
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -353,9 +376,10 @@
       let m = t.match(/^capo\s*[:\-]?\s*(?:on\s+)?(\d{1,2})(?:st|nd|rd|th)?(?:\s+fret)?\b/i);
       if (m) { meta.capo = m[1]; continue; }
       if (/^no capo$/i.test(t)) continue;
-      m = t.match(/^key\s*:\s*([A-G][#b♯♭]?m?)\s*$/i);
+      m = t.match(/^key\s*:?\s*([A-G][#b♯♭]?m?)\s*$/i);
       if (m) { meta.key = normalizeAccidentals(m[1]); continue; }
       if (/^(tuning|strumming|tempo|bpm)\s*:/i.test(t)) { out.push('{c: ' + t + '}'); continue; }
+      if (DIAGRAM_RE.test(t) || (!isChordLine(line) && isPageJunk(t))) continue;
 
       if (isTabLine(line)) {
         out.push('{sot}');
@@ -419,7 +443,7 @@
   }
 
   const api = {
-    parse, convert, importText, chordsIn, isChord, isChordLine, isTabLine, looksLikeChordPro,
+    parse, convert, importText, isPageJunk, chordsIn, isChord, isChordLine, isTabLine, looksLikeChordPro,
     transposeChord, transposeKey, makeTransposer, parseKey, keyName, guessKey, capoOptions, easeScore,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

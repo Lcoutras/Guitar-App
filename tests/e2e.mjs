@@ -28,12 +28,32 @@ await new Promise((r) => server.listen(0, r));
 const base = `http://127.0.0.1:${server.address().port}/`;
 
 const browser = await playwright.chromium.launch();
+
+// Stand-in for the MusicBrainz song catalogue.
+const MB = {
+  wonderwall: [
+    { title: 'Wonderwall - Remastered', score: 100, 'first-release-date': '2014-09-29', 'artist-credit': [{ name: 'Oasis' }], releases: [{ title: 'Morning Glory (Deluxe)', 'release-group': { 'primary-type': 'Album', 'secondary-types': [] } }] },
+    { title: 'Wonderwall', score: 98, 'first-release-date': '1995-10-02', 'artist-credit': [{ name: 'Oasis' }], releases: [{ title: '(What’s the Story) Morning Glory?', 'release-group': { 'primary-type': 'Album', 'secondary-types': [] } }] },
+    { title: 'Wonderwall', score: 90, 'first-release-date': '2005-01-01', 'artist-credit': [{ name: 'Ryan Adams' }], releases: [{ title: 'Love Is Hell', 'release-group': { 'primary-type': 'Album', 'secondary-types': [] } }] },
+  ],
+  'amazing grace': [
+    { title: 'Amazing Grace', score: 100, 'first-release-date': '1972', 'artist-credit': [{ name: 'John Newton' }], releases: [] },
+  ],
+};
+async function fakeCatalog(ctx) {
+  await ctx.route('https://musicbrainz.org/**', (r) => {
+    const q = new URL(r.request().url()).searchParams.get('query').toLowerCase();
+    const key = Object.keys(MB).find((k) => q.includes(k));
+    r.fulfill({ contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ recordings: key ? MB[key] : [] }) });
+  });  await ctx.route('https://www.ultimate-guitar.com/**', (r) => r.fulfill({ contentType: 'text/html', body: '<title>Chords</title>' }));
+}
 const failures = [];
 const check = (cond, msg) => { if (!cond) failures.push(msg); };
 
 async function newPage(name, viewport, opts = {}) {
   const ctx = await browser.newContext({ viewport, deviceScaleFactor: 2, hasTouch: true, isMobile: !!opts.mobile, serviceWorkers: 'block' });
   await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
+  await fakeCatalog(ctx);
   const page = await ctx.newPage();
   page.on('console', (m) => { if (m.type() === 'error') failures.push(`${name}: console error: ${m.text()}`); });
   page.on('pageerror', (e) => failures.push(`${name}: page error: ${e.message}`));
@@ -72,8 +92,35 @@ for (const size of sizes) {
   check(heads[0] === 'John Newton (trad.)', `${size.name}: artist sort first group is ${heads[0]}`);
   await page.fill('#q', 'susan');
   check((await page.$$('.song-row')).length === 1, `${size.name}: search should find 1 song`);
+  // Song search: find a song that isn't in the library and add it
   await page.fill('#q', 'wonderwall');
-  check(!!(await page.$('a[href*="ultimate-guitar.com/search.php"]')), `${size.name}: no-results should offer Find online`);
+  await page.waitForSelector('.catalog-row');
+  const found = await page.$$eval('.catalog-row', (els) => els.map((e) => e.querySelector('.row-title').textContent + ' / ' + e.querySelector('.row-sub').textContent));
+  check(found.length === 2 && found[0].startsWith('Wonderwall / Oasis') && found[0].includes('1995'), `${size.name}: catalogue results wrong: ${found.join(' | ')}`);
+  check(!!(await page.$('.catalog-foot a[href*="ultimate-guitar.com/search.php"]')), `${size.name}: search should still offer Find online`);
+  await shot(page, `${size.name}-1b-song-search`);
+  const [chordsTab] = await Promise.all([page.context().waitForEvent('page'), page.click('.catalog-row')]);
+  check(chordsTab.url().includes('ultimate-guitar.com/search.php') && chordsTab.url().includes('Wonderwall'), `${size.name}: chords tab not opened: ${chordsTab.url()}`);
+  await chordsTab.close();
+  await page.waitForSelector('#find-online.highlight');
+  check((await page.$eval('#ed-title', (e) => e.value)) === 'Wonderwall' && (await page.$eval('#ed-artist', (e) => e.value)) === 'Oasis', `${size.name}: editor not filled from search`);
+  await shot(page, `${size.name}-1c-added-from-search`);
+  await page.click('[data-act="cancel-edit"]');
+  await page.fill('#q', 'wonderwall');
+  await page.waitForSelector('.song-row:not(.catalog-row) .row-title');
+  check((await page.$eval('.song-row:not(.catalog-row)', (e) => e.textContent)).includes('No chords yet'), `${size.name}: added song not in library`);
+  await page.waitForSelector('.catalog-row');
+  check((await page.$eval('.catalog-row', (e) => e.textContent)).includes('In your songs'), `${size.name}: search should show the song is already added`);
+  // Remove it again so the rest of the walkthrough sees the usual library
+  await page.evaluate(async () => {
+    const st = window.StageTabs.state;
+    const s = st.songs.find((x) => x.title === 'Wonderwall');
+    st.songs = st.songs.filter((x) => x !== s);
+    await window.Store.remove('songs', s.id);
+  });
+  await page.fill('#q', 'amazing grace');
+  await page.waitForSelector('.catalog-row');
+  check((await page.$eval('.catalog-row', (e) => e.textContent)).includes('In your songs'), `${size.name}: example song should count as already added`);
   await page.fill('#q', '');
   await page.click('[data-act="sort"][data-sort="title"]');
 
@@ -218,6 +265,85 @@ for (const size of sizes) {
   await page.waitForSelector('.song-row');
   check((await page.$$('.song-row')).length === 5, `${size.name}: songs lost after reload`);
   check((await page.getAttribute('html', 'data-stage')) === 'light', `${size.name}: setting lost after reload`);
+  await ctx.close();
+}
+
+// Installed app (Home Screen / desktop): refresh button and update message
+{
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
+  await fakeCatalog(ctx);
+  await ctx.addInitScript(() => {
+    const real = window.matchMedia.bind(window);
+    window.matchMedia = (q) => (/display-mode:\s*standalone/.test(q) ? { matches: true, media: q, addEventListener() {}, removeEventListener() {} } : real(q));
+  });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => failures.push(`installed: page error: ${e.message}`));
+  await page.goto(base);
+  await page.waitForSelector('.song-row');
+  check(!!(await page.$('.topbar [data-act="refresh"]')), 'installed: no refresh button in the header');
+  await page.evaluate(() => window.StageTabs.showUpdateReady());
+  await page.waitForSelector('#update-bar');
+  await page.screenshot({ path: path.join(out, 'installed-update-ready.png') });
+  await Promise.all([page.waitForEvent('load'), page.click('#update-bar [data-update="go"]')]);
+  await page.waitForSelector('.song-row');
+  await Promise.all([page.waitForEvent('load'), page.click('.topbar [data-act="refresh"]')]);
+  await page.waitForSelector('.song-row');
+  // An update during a song waits until the song is closed
+  await page.click('.song-row');
+  await page.click('#preview [data-act="perform"]');
+  await page.evaluate(() => window.StageTabs.showUpdateReady());
+  check(!(await page.$('#update-bar')), 'installed: update message interrupted a song');
+  await page.click('[data-act="exit-perform"]');
+  await page.waitForSelector('#update-bar', { timeout: 2000 }).catch(() => failures.push('installed: update message not shown after the song'));
+  await ctx.close();
+}
+{
+  const { ctx, page } = await newPage('browser-tab', { width: 1180, height: 820 });
+  check(!(await page.$('.topbar [data-act="refresh"]')), 'browser tab: refresh button should only show in the installed app');
+  await page.click('[data-act="settings"]');
+  check((await page.textContent('.settings-sec:has([data-act="refresh"])')).includes('version 1.5'), 'settings: version not shown');
+  await Promise.all([page.waitForEvent('load'), page.click('.settings-sec [data-act="refresh"]')]);
+  await ctx.close();
+}
+
+// Paste button, copy steps, and tidying songs that were saved untidy
+{
+  const { ctx, page } = await newPage('paste', { width: 820, height: 1180 }, { mobile: true });
+  const src = fs.readFileSync(path.join(root, 'tests/chordpro.test.js'), 'utf8');
+  const pageCopy = eval(src.match(/const PAGE_COPY = (\[[\s\S]*?\]\.join\('\\n'\));/)[1]);
+  await page.click('[data-act="new-song"]');
+  check(!!(await page.$('.copy-steps')), 'paste: copy steps not shown for a new song');
+  await shot(page, 'paste-1-steps');
+  await page.evaluate((t) => navigator.clipboard.writeText(t), pageCopy);
+  await page.click('[data-act="paste-clip"]');
+  await page.waitForFunction(() => document.getElementById('ed-body').value.includes('{c: Verse 1}'));
+  const body = await page.$eval('#ed-body', (e) => e.value);
+  check(!/Autoscroll|views|022000|Report bad tab|Log in/.test(body), 'paste: page extras left in:\n' + body);
+  check((await page.$eval('#ed-title', (e) => e.value)) === 'Highway Lights' && (await page.$eval('#ed-artist', (e) => e.value)) === 'The Night Drivers', 'paste: title/artist not filled');
+  check(!(await page.$('.copy-steps')), 'paste: copy steps should hide once a song is in');
+  // Pasting more into a song that is already there adds a tidied-up part at the cursor
+  await page.$eval('#ed-body', (e) => { e.focus(); e.selectionStart = e.selectionEnd = e.value.length; });
+  await page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.setData('text/plain', '\n[Bridge]\nAm        G\nSlow it down now');
+    document.getElementById('ed-body').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+  const body2 = await page.$eval('#ed-body', (e) => e.value);
+  check(body2.trim().endsWith('{c: Bridge}\n[Am]Slow it do[G]wn now'), 'paste: second paste not tidied:\n' + body2.slice(-80));
+  await page.click('[data-act="save-edit"]');
+  await page.waitForSelector('.song-row');
+  // A song saved earlier with chords as plain lines is fixed on next launch
+  await page.evaluate(() => window.Store.put('songs', {
+    id: 'raw-1', title: 'Untidy Song', artist: 'Someone', key: '', capo: 0, tempo: '', transpose: 0, fontScale: 1, scrollLevel: 6,
+    body: '[Verse]\nG       C\nHello again\nD       G\nGoodbye now', createdAt: 1, updatedAt: 1,
+  }));
+  await page.reload();
+  await page.waitForSelector('.song-row');
+  const fixed = await page.evaluate(() => window.StageTabs.state.songs.find((x) => x.id === 'raw-1').body);
+  check(fixed === '{c: Verse}\n[G]Hello ag[C]ain\n[D]Goodbye [G]now', 'paste: untidy saved song not fixed:\n' + fixed);
+  await page.click('.song-row:has-text("Untidy Song")');
+  await page.waitForSelector('#sheet-scroll .ch.on');
+  await shot(page, 'paste-2-untidy-fixed');
   await ctx.close();
 }
 
