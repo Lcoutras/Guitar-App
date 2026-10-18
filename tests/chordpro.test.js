@@ -131,3 +131,59 @@ test('Windows line endings, tabs and non-breaking spaces', () => {
   const r = CP.convert('G\u00a0\u00a0\u00a0C\r\nHey there Joe\r\n');
   assert.equal(r.body, '[G]Hey [C]there Joe');
 });
+
+// A whole chord page copied from a phone or iPad, with the site's extras.
+// The song itself is made up.
+const PAGE_COPY = [
+  'Log in', 'Sign up', 'Tabs', 'Courses',
+  'Highway Lights Chords by The Night Drivers',
+  'Difficulty: novice',
+  'Tuning: E A D G B E',
+  'Key: Em',
+  'Capo: no capo',
+  'Autoscroll', 'Transpose', 'Simplify',
+  '[Intro]',
+  'Em   D   G   Em',
+  '',
+  '[Verse 1]',
+  'Em'.padEnd(11) + 'D'.padEnd(8) + 'G',
+  'Out on the highway lights are low',
+  'Em'.padEnd(8) + 'D'.padEnd(8) + 'G',
+  'Nowhere left to go',
+  '',
+  '[Chorus]',
+  'C'.padEnd(8) + 'G',
+  'Keep on driving',
+  '',
+  'Chords',
+  'Em 022000', 'D xx0232', 'G 320003', 'C x32010',
+  'Last update: Mar 3, 2021',
+  '1,234 views',
+  'Rating',
+  '4.8',
+  'Report bad tab',
+].join('\n');
+
+test('a whole copied page is reduced to just the song', () => {
+  const r = CP.importText(PAGE_COPY);
+  assert.equal(r.meta.title, 'Highway Lights');
+  assert.equal(r.meta.artist, 'The Night Drivers');
+  assert.equal(r.meta.key, 'Em');
+  assert.equal(r.body, [
+    '{c: Tuning: E A D G B E}',
+    '{c: Intro}',
+    '[Em]     [D]    [G]    [Em]',
+    '',
+    '{c: Verse 1}',
+    '[Em]Out on the [D]highway [G]lights are low',
+    '[Em]Nowhere [D]left to [G]go',
+    '',
+    '{c: Chorus}',
+    '[C]Keep on [G]driving',
+  ].join('\n'));
+});
+
+test('ordinary lyric lines are never treated as page extras', () => {
+  for (const t of ['Key to my heart', 'Show me the way', 'Stop', 'Hold on', 'Well I won’t give in', 'Em']) assert.ok(!CP.isPageJunk(t), t);
+  for (const t of ['Difficulty: novice', 'Em 022000', 'x32010', '1,234 views', 'Autoscroll', 'Capo: no capo', 'Last update: Jan 5, 2020']) assert.ok(CP.isPageJunk(t), t);
+});

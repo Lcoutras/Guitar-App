@@ -324,3 +324,6 @@ textarea.input { min-height: 120px; resize: vertical; line-height: 1.45; }
 .catalog-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 14px 4px; color: var(--muted); }
 .find-online.highlight { border-style: solid; border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .find-online.highlight p { color: var(--fg); }
+.copy-steps { padding: 12px 14px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); color: var(--muted); font-size: 0.95rem; }
+.copy-steps b { color: var(--fg); }
+.copy-steps ol { margin: 8px 0 0; padding-left: 1.3em; display: flex; flex-direction: column; gap: 4px; }

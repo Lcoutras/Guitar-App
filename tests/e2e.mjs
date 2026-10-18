@@ -301,8 +301,49 @@ for (const size of sizes) {
   const { ctx, page } = await newPage('browser-tab', { width: 1180, height: 820 });
   check(!(await page.$('.topbar [data-act="refresh"]')), 'browser tab: refresh button should only show in the installed app');
   await page.click('[data-act="settings"]');
-  check((await page.textContent('.settings-sec:has([data-act="refresh"])')).includes('version 1.4'), 'settings: version not shown');
+  check((await page.textContent('.settings-sec:has([data-act="refresh"])')).includes('version 1.5'), 'settings: version not shown');
   await Promise.all([page.waitForEvent('load'), page.click('.settings-sec [data-act="refresh"]')]);
+  await ctx.close();
+}
+
+// Paste button, copy steps, and tidying songs that were saved untidy
+{
+  const { ctx, page } = await newPage('paste', { width: 820, height: 1180 }, { mobile: true });
+  const src = fs.readFileSync(path.join(root, 'tests/chordpro.test.js'), 'utf8');
+  const pageCopy = eval(src.match(/const PAGE_COPY = (\[[\s\S]*?\]\.join\('\\n'\));/)[1]);
+  await page.click('[data-act="new-song"]');
+  check(!!(await page.$('.copy-steps')), 'paste: copy steps not shown for a new song');
+  await shot(page, 'paste-1-steps');
+  await page.evaluate((t) => navigator.clipboard.writeText(t), pageCopy);
+  await page.click('[data-act="paste-clip"]');
+  await page.waitForFunction(() => document.getElementById('ed-body').value.includes('{c: Verse 1}'));
+  const body = await page.$eval('#ed-body', (e) => e.value);
+  check(!/Autoscroll|views|022000|Report bad tab|Log in/.test(body), 'paste: page extras left in:\n' + body);
+  check((await page.$eval('#ed-title', (e) => e.value)) === 'Highway Lights' && (await page.$eval('#ed-artist', (e) => e.value)) === 'The Night Drivers', 'paste: title/artist not filled');
+  check(!(await page.$('.copy-steps')), 'paste: copy steps should hide once a song is in');
+  // Pasting more into a song that is already there adds a tidied-up part at the cursor
+  await page.$eval('#ed-body', (e) => { e.focus(); e.selectionStart = e.selectionEnd = e.value.length; });
+  await page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.setData('text/plain', '\n[Bridge]\nAm        G\nSlow it down now');
+    document.getElementById('ed-body').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+  const body2 = await page.$eval('#ed-body', (e) => e.value);
+  check(body2.trim().endsWith('{c: Bridge}\n[Am]Slow it do[G]wn now'), 'paste: second paste not tidied:\n' + body2.slice(-80));
+  await page.click('[data-act="save-edit"]');
+  await page.waitForSelector('.song-row');
+  // A song saved earlier with chords as plain lines is fixed on next launch
+  await page.evaluate(() => window.Store.put('songs', {
+    id: 'raw-1', title: 'Untidy Song', artist: 'Someone', key: '', capo: 0, tempo: '', transpose: 0, fontScale: 1, scrollLevel: 6,
+    body: '[Verse]\nG       C\nHello again\nD       G\nGoodbye now', createdAt: 1, updatedAt: 1,
+  }));
+  await page.reload();
+  await page.waitForSelector('.song-row');
+  const fixed = await page.evaluate(() => window.StageTabs.state.songs.find((x) => x.id === 'raw-1').body);
+  check(fixed === '{c: Verse}\n[G]Hello ag[C]ain\n[D]Goodbye [G]now', 'paste: untidy saved song not fixed:\n' + fixed);
+  await page.click('.song-row:has-text("Untidy Song")');
+  await page.waitForSelector('#sheet-scroll .ch.on');
+  await shot(page, 'paste-2-untidy-fixed');
   await ctx.close();
 }
 

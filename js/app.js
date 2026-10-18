@@ -26,7 +26,7 @@
     settings: { stage: 'dark' },
   };
 
-  const APP_VERSION = '1.4';
+  const APP_VERSION = '1.5';
   const SPEED_MIN = 1, SPEED_MAX = 20, SPEED_DEFAULT = 6;
   const FONT_MIN = 0.6, FONT_MAX = 2.4;
 
@@ -58,6 +58,7 @@
     wand: '<path d="m15 4 5 5L9 20H4v-5z"/><path d="M13 6l5 5"/>',
     download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5M12 15V3"/>',
     send: '<path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/>',
+    paste: '<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>',
     refresh: '<path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/>',
     upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5M12 3v12"/>',
   };
@@ -132,6 +133,8 @@
       await Store.setMeta('seeded', true);
     }
     state.songs = await Store.getAll('songs');
+    const tidied = state.songs.filter(tidyRawSheet);
+    if (tidied.length) await Store.putMany('songs', tidied);
     state.setlists = await Store.getAll('setlists');
     state.settings = Object.assign(state.settings, await Store.getMeta('settings', {}));
     state.sort = await Store.getMeta('sort', 'title');
@@ -568,8 +571,20 @@
             '</div></div>' +
             '<div class="field" id="ed-body-wrap"' + (e.pane === 'preview' ? ' hidden' : '') + '>' +
               '<label for="ed-body">Chords and lyrics</label>' +
+              (d.body ? '' :
+                '<div class="copy-steps">' +
+                  '<b>Getting a song from Ultimate Guitar on iPad</b>' +
+                  '<ol>' +
+                    '<li>Open the song with the <b>Ultimate Guitar</b> button above.</li>' +
+                    '<li>Touch and hold the <b>first word or chord</b> of the song until it turns blue.</li>' +
+                    '<li>Drag the <b>lower blue handle</b> down to the last line of the song. The page scrolls as you drag. Grabbing too much is fine: extra bits from the page are removed for you.</li>' +
+                    '<li>Tap <b>Copy</b>, come back here and tap <b>Paste</b>.</li>' +
+                  '</ol>' +
+                '</div>') +
               '<div class="body-tools">' +
+                '<button class="btn small primary" data-act="paste-clip">' + icon('paste') + 'Paste</button>' +
                 '<button class="btn small" data-act="convert">' + icon('wand') + 'Line up chords</button>' +
+                (d.source && d.body ? '<button class="btn small" data-act="redo-paste">Start over from what I pasted</button>' : '') +
                 '<label class="btn small" for="ed-file">' + icon('file') + 'Open a file</label>' +
                 '<input type="file" id="ed-file" accept=".txt,.cho,.chopro,.chordpro,.crd,.pro,text/plain" hidden>' +
                 (d.body ? '' : '<button class="btn small ghost" data-act="paste-example">Try an example</button>') +
@@ -645,8 +660,24 @@
     else toast('Chord sheet loaded');
   }
 
+  // A sheet with chords on their own lines that was never lined up (typed in
+  // or pasted another way) gets lined up, so it never shows as plain text.
+  function tidyRawSheet(song) {
+    const body = song.body || '';
+    if (!body.trim() || CP.looksLikeChordPro(body)) return false;
+    const chordLines = body.split('\n').filter((l) => CP.isChordLine(l)).length;
+    if (chordLines < 2) return false;
+    const r = CP.importText(body);
+    if (!song.source) song.source = body;
+    song.body = r.body;
+    ['title', 'artist', 'key'].forEach((f) => { if (!song[f] && r.meta[f]) song[f] = r.meta[f]; });
+    if (!Number(song.capo) && r.meta.capo) song.capo = Number(r.meta.capo) || 0;
+    return true;
+  }
+
   async function saveEdit() {
     const d = readEditForm();
+    tidyRawSheet(d);
     if (!d.title) d.title = 'Untitled';
     const song = Object.assign(byId(state.songs, d.id) || newSong(), d);
     await saveSong(song);
@@ -1375,6 +1406,21 @@
         applyImported(CP.importText(d.body), true, d.body);
         break;
       }
+      case 'paste-clip': {
+        let text = '';
+        try { text = await navigator.clipboard.readText(); } catch (err) { text = ''; }
+        if (!text.trim()) { toast('Nothing to paste. Copy the song first, or tap in the box below and choose Paste.'); break; }
+        const d = readEditForm();
+        if (d.body.trim() && !(await confirmBox('Replace this song’s chords?', 'What’s in the box now will be replaced by what you copied.', 'Replace'))) break;
+        applyImported(CP.importText(text), true, text);
+        break;
+      }
+      case 'redo-paste': {
+        const d = readEditForm();
+        if (!(await confirmBox('Start over from what you pasted?', 'Any changes you made to the chords by hand will be lost.', 'Start over'))) break;
+        applyImported(CP.importText(d.source), true, d.source);
+        break;
+      }
       case 'paste-example': applyImported(CP.importText(window.Seed.pasteExample), true, window.Seed.pasteExample); break;
       case 'delete-song': {
         const d = state.edit.draft;
@@ -1479,15 +1525,22 @@
     state.setlistId = sl.id; state.view = 'setlist'; render();
   });
 
-  // Pasting into an empty chord box lines up the chords straight away.
+  // Pasting into the chord box lines up the chords straight away. Pasting
+  // into a box that already has a song adds the tidied-up part where the
+  // cursor is.
   app.addEventListener('paste', (e) => {
     const t = e.target;
     if (t.id !== 'ed-body') return;
     const text = (e.clipboardData || window.clipboardData).getData('text');
+    if (!text) return;
     const replacingAll = !t.value.trim() || (t.selectionStart === 0 && t.selectionEnd === t.value.length);
-    if (!text || !replacingAll) return;
     e.preventDefault();
-    applyImported(CP.importText(text), true, text);
+    if (replacingAll) { applyImported(CP.importText(text), true, text); return; }
+    const r = CP.importText(text);
+    const start = t.selectionStart, end = t.selectionEnd;
+    t.value = t.value.slice(0, start) + r.body + t.value.slice(end);
+    t.selectionStart = t.selectionEnd = start + r.body.length;
+    updateEditPreview();
   });
 
   document.addEventListener('keydown', (e) => {
