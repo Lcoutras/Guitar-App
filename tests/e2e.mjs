@@ -54,6 +54,8 @@ async function newPage(name, viewport, opts = {}) {
   const ctx = await browser.newContext({ viewport, deviceScaleFactor: 2, hasTouch: true, isMobile: !!opts.mobile, serviceWorkers: 'block' });
   await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
   await fakeCatalog(ctx);
+  // Never send test suggestions to the real ticket database.
+  if (!opts.tickets) await ctx.route('**/js/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: 'window.STAGE_TABS_CONFIG = {};' }));
   const page = await ctx.newPage();
   page.on('console', (m) => { if (m.type() === 'error') failures.push(`${name}: console error: ${m.text()}`); });
   page.on('pageerror', (e) => failures.push(`${name}: page error: ${e.message}`));
@@ -272,6 +274,7 @@ for (const size of sizes) {
 {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
   await fakeCatalog(ctx);
+  await ctx.route('**/js/config.js', (r) => r.fulfill({ contentType: 'text/javascript', body: 'window.STAGE_TABS_CONFIG = {};' }));
   await ctx.addInitScript(() => {
     const real = window.matchMedia.bind(window);
     window.matchMedia = (q) => (/display-mode:\s*standalone/.test(q) ? { matches: true, media: q, addEventListener() {}, removeEventListener() {} } : real(q));
