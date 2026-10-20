@@ -23,6 +23,12 @@ create table if not exists public.feedback (
 -- No policies: the app's public key cannot read, change or delete rows.
 alter table public.feedback enable row level security;
 
+-- Explicit grants (Supabase no longer auto-grants new public tables). The app
+-- never touches the table directly, only via submit_feedback() below, so anon
+-- and authenticated get nothing; service_role keeps server-side access.
+revoke all on public.feedback from anon, authenticated;
+grant select, insert, update, delete on public.feedback to service_role;
+
 create or replace function public.submit_feedback(
   p_kind text,
   p_message text default '',
