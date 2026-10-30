@@ -41,6 +41,12 @@ Suggestions are stored in a free [Supabase](https://supabase.com) project of the
 
 Tickets appear in **Table Editor → feedback**, newest last. Change `status` to `in progress`, `done` or `won't fix` as you work through them. The publishable key is meant to be public: the database only lets it add tickets through `submit_feedback()`, never read, change or delete them.
 
+## Keeping the suggestions database awake
+
+Supabase pauses free projects after 7 days without activity. `.github/workflows/keep-database-awake.yml` makes one small read-only request each day so that never happens. If the database ever doesn't answer (for example because it was paused anyway), that day's run fails and GitHub emails the repository owner, and the message links to the dashboard where it can be unpaused. It can also be run by hand from the repository's **Actions** tab.
+
+GitHub stops scheduled jobs in repositories with no changes for 60 days. If that happens, GitHub sends an email, and re-enabling the job in the **Actions** tab is one tap.
+
 ## Development
 
 There is no build step. The files are plain HTML, CSS and JavaScript.

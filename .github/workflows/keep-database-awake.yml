@@ -1,0 +1,38 @@
+# Supabase pauses free projects after 7 days without activity, which would
+# stop in-app suggestions from arriving. This makes one tiny read-only
+# request to the Stage Tabs database each day so it never looks idle.
+# If the database is unreachable (for example already paused), the run fails
+# and GitHub emails the repository owner.
+name: Keep suggestions database awake
+
+on:
+  schedule:
+    - cron: '17 9 * * *' # every day, 09:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: js/config.js
+          sparse-checkout-cone-mode: false
+
+      - name: Ping the database
+        run: |
+          url=$(sed -n "s/.*supabaseUrl: *'\([^']*\)'.*/\1/p" js/config.js)
+          key=$(sed -n "s/.*supabaseKey: *'\([^']*\)'.*/\1/p" js/config.js)
+          if [ -z "$url" ] || [ -z "$key" ]; then echo "No database set up in js/config.js; nothing to do."; exit 0; fi
+          # A read the public key is not allowed to see anything from: it returns
+          # an empty list, but still counts as activity.
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+            -H "apikey: $key" "$url/rest/v1/feedback?select=ticket_number&limit=1")
+          echo "Database answered with HTTP $code"
+          if [ "$code" = "000" ] || [ "$code" -ge 500 ]; then
+            echo "::error::The Stage Tabs suggestions database did not answer. It may be paused: unpause it at https://supabase.com/dashboard/project/$(echo "$url" | sed "s|https://||; s|\.supabase\.co||")"
+            exit 1
+          fi
